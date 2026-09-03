@@ -63,7 +63,7 @@ bot_state = {
     "rr_ratio": saved_conf["rr_ratio"],
     "cutoff_time": saved_conf["cutoff_time"],
     "trades_executed_today": 0,
-    "fno_stocks": [],              # List with symbol, token, pdh, pdl
+    "fno_stocks": [],
     "total_pnl": 0.0,
     "market_indices": {
         "NIFTY": {"ltp": 0.0, "change": 0.0, "pchange": 0.0},
@@ -85,7 +85,6 @@ def log(msg):
     print(bot_state["status_log"])
 
 def calculate_quantity(risk_amount, entry_price, sl_price):
-    """Quantity = Risk Per Trade / SL Points"""
     try:
         sl_points = abs(entry_price - sl_price)
         if sl_points <= 0.05:
@@ -115,7 +114,6 @@ def fetch_candles(token, interval="FIVE_MINUTE", days=2):
     return None
 
 def fetch_daily_pdh_pdl(token):
-    """Pichle trading day ka High aur Low (PDH/PDL) fetch karta hai"""
     now = get_ist_now()
     from_date = (now - datetime.timedelta(days=7)).strftime("%Y-%m-%d 09:15")
     to_date = (now - datetime.timedelta(days=1)).strftime("%Y-%m-%d 15:30")
@@ -138,14 +136,12 @@ def fetch_daily_pdh_pdl(token):
     return None, None, None
 
 def load_fno_universe():
-    """Angel One Scrip Master se automatically sare F&O Cash stocks detect karta hai"""
     try:
         log("Auto-detecting all active F&O Cash stocks from Angel Master...")
         url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
         res = requests.get(url, timeout=20)
         master = res.json()
 
-        # Step 1: Active F&O Futures ke symbols dhoondna
         fno_names = set()
         for s in master:
             if s.get('exch_seg') == 'NFO' and s.get('instrumenttype') == 'FUTSTK':
@@ -153,7 +149,6 @@ def load_fno_universe():
                 if name:
                     fno_names.add(name.strip())
 
-        # Step 2: Unhi symbols ke NSE Cash (-EQ) tokens map karna
         matched_stocks = []
         for s in master:
             if s.get('exch_seg') == 'NSE' and str(s.get('symbol', '')).endswith('-EQ'):
@@ -167,10 +162,9 @@ def load_fno_universe():
 
         log(f"Found {len(matched_stocks)} active F&O Cash stocks. Fetching PDH & PDL...")
 
-        # Step 3: Har stock ke liye PDH aur PDL nikalna
         final_list = []
         for item in matched_stocks:
-            time.sleep(0.08)  # API rate limit safety
+            time.sleep(0.08)
             pdh, pdl, prev_close = fetch_daily_pdh_pdl(item["token"])
             if pdh and pdl:
                 final_list.append({
@@ -226,7 +220,7 @@ def update_settings():
     if "risk_amount" in data:
         bot_state["risk_amount"] = int(data["risk_amount"])
     save_config()
-    log("Settings updated.")
+    log("Settings updated successfully.")
     return jsonify({"status": "success"})
 
 @app.route('/api/toggle-engine', methods=['POST'])
@@ -245,7 +239,7 @@ def set_mode():
     if mode in ["PAPER", "LIVE"]:
         bot_state["trading_mode"] = mode
         save_config()
-        log(f"Mode changed to: {mode}")
+        log(f"Mode switched to: {mode}")
         return jsonify({"status": "success", "mode": mode})
     return jsonify({"status": "error"})
 
@@ -253,6 +247,9 @@ def set_mode():
 def get_state():
     return jsonify({
         "logged_in": bot_state["is_logged_in"],
+        "is_logged_in": bot_state["is_logged_in"],
+        "broker_connected": bot_state["is_logged_in"],
+        "angel_status": "CONNECTED" if bot_state["is_logged_in"] else "WAITING LOGIN",
         "engine_running": bot_state["engine_running"],
         "trading_mode": bot_state["trading_mode"],
         "max_trades": bot_state["max_trades"],
@@ -260,6 +257,7 @@ def get_state():
         "cutoff_time": bot_state["cutoff_time"],
         "risk_amount": bot_state["risk_amount"],
         "trades_executed_today": bot_state["trades_executed_today"],
+        "stocks_loaded_count": len(bot_state["fno_stocks"]),
         "status": bot_state["status_log"],
         "total_pnl": bot_state["total_pnl"],
         "market_indices": bot_state["market_indices"],
@@ -283,7 +281,7 @@ def place_live_order(symbol, token, side, qty):
             "quantity": str(qty)
         }
         res = bot_state["smart_api"].placeOrder(order_params)
-        log(f"LIVE ORDER SENT: {side} {qty} {symbol} | Response: {res}")
+        log(f"LIVE ORDER SENT: {side} {qty} {symbol} | Res: {res}")
         return res
     except Exception as e:
         log(f"LIVE ORDER FAILED: {e}")
@@ -310,9 +308,7 @@ def background_scanner():
             time.sleep(5)
             continue
 
-        # ---------------------------------------------------------
-        # 1. 09:20:02 AM - SCAN C1 FOR 5x VOLUME + PDH/PDL BREAKOUT
-        # ---------------------------------------------------------
+        # 09:20 AM - C1 Filter (>= 5x Volume AND Close > PDH ya Close < PDL)
         if not c1_scanned and now_time >= datetime.time(9, 20, 2):
             log("09:20 AM: Scanning C1 for 5x Volume AND PDH/PDL Breakout...")
             candidates = []
@@ -330,11 +326,8 @@ def background_scanner():
                     pdh = item["pdh"]
                     pdl = item["pdl"]
 
-                    # Filter: Volume >= 5x
                     if avg_vol > 0 and (c1_vol >= 5 * avg_vol):
                         bias = None
-
-                        # Filter: Close > PDH ya Close < PDL
                         if c1_close > pdh:
                             bias = "BULLISH_PDH_BREAKOUT"
                         elif c1_close < pdl:
@@ -359,9 +352,7 @@ def background_scanner():
             log(f"C1 Scan Complete: {len(candidates)} candidate(s) ready for C2 validation.")
             c1_scanned = True
 
-        # ---------------------------------------------------------
-        # 2. 09:25:02 AM - C2 SETUP VALIDATION & ORDER EXECUTION
-        # ---------------------------------------------------------
+        # 09:25 AM - C2 Confirmation Rules & Auto Execution
         if c1_scanned and not c2_scanned and now_time >= datetime.time(9, 25, 2):
             log("09:25 AM: Validating C2 Setup and Triggering Orders...")
 
@@ -385,7 +376,6 @@ def background_scanner():
                     trigger_price = 0.0
                     sl = 0.0
 
-                    # BUY SETUP (Bullish PDH Breakout)
                     if cand["bias"] == "BULLISH_PDH_BREAKOUT":
                         if c2_high > c1_h:
                             if c2_close > c1_h:
@@ -393,14 +383,12 @@ def background_scanner():
                                 trigger_price = c2_high
                                 sl = c2_low
                             else:
-                                log(f"{cand['symbol']} Invalid: C2 High crossed C1 High but failed to close above.")
+                                log(f"{cand['symbol']} Invalid: C2 broke High but didn't close above.")
                         elif c2_high <= c1_h and c2_low >= c1_l:
-                            # Inside Bar
                             side = "BUY"
                             trigger_price = c1_h
                             sl = c2_low
 
-                    # SELL SETUP (Bearish PDL Breakdown)
                     elif cand["bias"] == "BEARISH_PDL_BREAKDOWN":
                         if c2_low < c1_l:
                             if c2_close < c1_l:
@@ -408,14 +396,12 @@ def background_scanner():
                                 trigger_price = c2_low
                                 sl = c2_high
                             else:
-                                log(f"{cand['symbol']} Invalid: C2 Low crossed C1 Low but failed to close below.")
+                                log(f"{cand['symbol']} Invalid: C2 broke Low but didn't close below.")
                         elif c2_high <= c1_h and c2_low >= c1_l:
-                            # Inside Bar
                             side = "SELL"
                             trigger_price = c1_l
                             sl = c2_high
 
-                    # Order Placement
                     if side:
                         risk_pts = abs(trigger_price - sl)
                         qty = calculate_quantity(bot_state["risk_amount"], trigger_price, sl)
@@ -457,13 +443,11 @@ def background_scanner():
         time.sleep(1)
 
 def market_data_monitor():
-    """Live Nifty/Sensex, Market Movers aur Active Trades ko monitor karta hai"""
     last_movers_check = 0
 
     while bot_state["is_logged_in"]:
         now_ts = time.time()
         try:
-            # 1. Nifty Spot
             n_res = bot_state["smart_api"].ltpData("NSE", "NIFTY", "99926000")
             if n_res and n_res.get("data"):
                 ltp = float(n_res["data"]["ltp"])
@@ -472,7 +456,6 @@ def market_data_monitor():
                 pchange = round((change / close) * 100, 2) if close > 0 else 0.0
                 bot_state["market_indices"]["NIFTY"] = {"ltp": ltp, "change": change, "pchange": pchange}
 
-            # 2. Sensex Spot
             s_res = bot_state["smart_api"].ltpData("BSE", "SENSEX", "99919000")
             if s_res and s_res.get("data"):
                 ltp = float(s_res["data"]["ltp"])
@@ -483,11 +466,11 @@ def market_data_monitor():
         except Exception:
             pass
 
-        # 3. Market Movers Update (Har 15 seconds me calculate hoga)
+        # Calculate Market Movers every 15 seconds
         if now_ts - last_movers_check > 15 and bot_state["fno_stocks"]:
             last_movers_check = now_ts
             movers_data = []
-            sample_stocks = bot_state["fno_stocks"][:30]  # Fast calculation for top liquid stocks
+            sample_stocks = bot_state["fno_stocks"][:30]
             for st in sample_stocks:
                 try:
                     res = bot_state["smart_api"].ltpData("NSE", st["symbol"], str(st["token"]))
@@ -507,7 +490,7 @@ def market_data_monitor():
                 bot_state["market_movers"]["gainers"] = sorted_movers[:5]
                 bot_state["market_movers"]["losers"] = sorted(movers_data, key=lambda x: x["pchange"])[:5]
 
-        # 4. Active Trades Management (1:2 Half Booking & Trailing)
+        # Monitor Active Positions: 1:2 Half Booking & Trailing
         open_trades = [t for t in bot_state["active_trades"] if t["status"] == "OPEN"]
         for trade in open_trades:
             try:
@@ -520,7 +503,6 @@ def market_data_monitor():
                     if trade["side"] == "BUY":
                         trade["pnl"] = round((ltp - trade["entry"]) * trade["remaining_qty"], 2)
 
-                        # 1:2 Milestone: 50% book aur SL to Cost
                         if not trade["half_booked"] and ltp >= (trade["entry"] + 2 * risk_unit):
                             half_qty = max(1, trade["remaining_qty"] // 2)
                             trade["remaining_qty"] -= half_qty
@@ -539,10 +521,9 @@ def market_data_monitor():
                                 place_live_order(trade["symbol"], trade["token"], "SELL", trade["remaining_qty"])
                             record_trade_history(trade, ltp)
 
-                    else:  # SELL Side
+                    else:
                         trade["pnl"] = round((trade["entry"] - ltp) * trade["remaining_qty"], 2)
 
-                        # 1:2 Milestone
                         if not trade["half_booked"] and ltp <= (trade["entry"] - 2 * risk_unit):
                             half_qty = max(1, trade["remaining_qty"] // 2)
                             trade["remaining_qty"] -= half_qty
@@ -550,7 +531,7 @@ def market_data_monitor():
                             trade["sl"] = trade["entry"]
                             log(f"1:2 Hit on {trade['symbol']}! Booked 50%. SL trailed to Cost.")
 
-                        if ltp <= trade["sl"]:
+                        if ltp >= trade["sl"]:
                             trade["status"] = "SL / TRAIL HIT"
                             if trade["mode"] == "LIVE":
                                 place_live_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
