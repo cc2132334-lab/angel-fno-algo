@@ -12,17 +12,25 @@ app = Flask(__name__)
 
 bot_state = {
     "is_logged_in": False,
-    "engine_running": True,   # Start / Stop toggle state
+    "engine_running": True,
     "smart_api": None,
     "feed_token": None,
     "risk_amount": 500,
-    "trading_mode": "PAPER",  # 'PAPER' ya 'LIVE'
+    "trading_mode": "PAPER",
     "fno_stocks": [],
-    "c1_candidates": [],
-    "active_trades": [],
     "total_pnl": 0.0,
-    "market_indices": {"NIFTY": 0.0, "SENSEX": 0.0},
-    "status_log": "System ready. Please login to start."
+    "market_indices": {
+        "NIFTY": {"ltp": 0.0, "change": 0.0, "pchange": 0.0},
+        "SENSEX": {"ltp": 0.0, "change": 0.0, "pchange": 0.0}
+    },
+    "market_stats": {
+        "top_gainers": [],
+        "top_losers": [],
+        "volume_buzzers": []
+    },
+    "active_trades": [],
+    "trade_history": [],
+    "status_log": "Terminal Ready. Please connect broker."
 }
 
 def log(msg):
@@ -30,7 +38,7 @@ def log(msg):
     bot_state["status_log"] = f"[{timestamp}] {msg}"
     print(bot_state["status_log"])
 
-def load_fno_cash_symbols():
+def load_fno_symbols():
     try:
         url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
         res = requests.get(url, timeout=12)
@@ -54,8 +62,8 @@ def load_fno_cash_symbols():
                 if sym in nse_equities:
                     stocks.append({"symbol": f"{sym}-EQ", "token": nse_equities[sym]})
 
-        bot_state["fno_stocks"] = stocks[:160]
-        log(f"Loaded {len(bot_state['fno_stocks'])} Nifty F&O Cash Stocks.")
+        bot_state["fno_stocks"] = stocks[:150]
+        log(f"Loaded {len(bot_state['fno_stocks'])} Stocks.")
     except Exception as e:
         log(f"Error loading scrip master: {e}")
 
@@ -75,12 +83,13 @@ def api_login():
             bot_state["smart_api"] = smart_api
             bot_state["feed_token"] = smart_api.getfeedToken()
             bot_state["is_logged_in"] = True
-            log("Angel One connected! Live threads started.")
+            log("Broker Connected! Live data stream active.")
 
-            threading.Thread(target=background_scanner, daemon=True).start()
-            threading.Thread(target=live_pnl_and_indices_tracker, daemon=True).start()
+            load_fno_symbols()
+            threading.Thread(target=market_data_monitor, daemon=True).start()
+            threading.Thread(target=market_stats_scanner, daemon=True).start()
 
-            return jsonify({"status": "success", "message": "Connected to Angel One!"})
+            return jsonify({"status": "success", "message": "Login Successful!"})
         else:
             return jsonify({"status": "error", "message": login_res.get("message", "Login failed")})
     except Exception as e:
@@ -90,18 +99,9 @@ def api_login():
 def toggle_engine():
     data = request.json
     bot_state["engine_running"] = data.get("running", True)
-    state_str = "STARTED" if bot_state["engine_running"] else "STOPPED (PAUSED)"
-    log(f"Algo Engine manual status: {state_str}")
+    status_str = "RUNNING" if bot_state["engine_running"] else "STOPPED"
+    log(f"Engine status changed: {status_str}")
     return jsonify({"status": "success", "engine_running": bot_state["engine_running"]})
-
-@app.route('/api/set-risk', methods=['POST'])
-def set_risk():
-    data = request.json
-    risk = int(data.get("risk", 500))
-    if 50 <= risk <= 5000:
-        bot_state["risk_amount"] = risk
-        return jsonify({"status": "success", "risk": risk})
-    return jsonify({"status": "error", "message": "Risk limit error"})
 
 @app.route('/api/set-mode', methods=['POST'])
 def set_mode():
@@ -109,7 +109,7 @@ def set_mode():
     mode = data.get("mode", "PAPER").upper()
     if mode in ["PAPER", "LIVE"]:
         bot_state["trading_mode"] = mode
-        log(f"Switched Trading Mode to: {mode}")
+        log(f"Mode changed to: {mode}")
         return jsonify({"status": "success", "mode": mode})
     return jsonify({"status": "error", "message": "Invalid mode"})
 
@@ -118,227 +118,40 @@ def get_state():
     return jsonify({
         "logged_in": bot_state["is_logged_in"],
         "engine_running": bot_state["engine_running"],
-        "status": bot_state["status_log"],
-        "risk_amount": bot_state["risk_amount"],
         "trading_mode": bot_state["trading_mode"],
+        "status": bot_state["status_log"],
         "total_pnl": bot_state["total_pnl"],
         "market_indices": bot_state["market_indices"],
-        "c1_candidates": bot_state["c1_candidates"],
-        "active_trades": bot_state["active_trades"]
+        "market_stats": bot_state["market_stats"],
+        "active_trades": bot_state["active_trades"],
+        "trade_history": bot_state["trade_history"]
     })
 
-@app.route('/api/offline-scan', methods=['POST'])
-def offline_scan():
-    """Kisi bhi chuni gayi date ka 5x volume C1 breakout scan karna"""
-    if not bot_state["is_logged_in"]:
-        return jsonify({"status": "error", "message": "Pehle broker login karein."})
-    
-    data = request.json
-    target_date = data.get("date") # Format: YYYY-MM-DD
-    if not target_date:
-        return jsonify({"status": "error", "message": "Date select karein."})
-    
-    try:
-        t_date = datetime.datetime.strptime(target_date, "%Y-%m-%d")
-        from_date = (t_date - datetime.timedelta(days=5)).strftime("%Y-%m-%d 09:15")
-        to_date = t_date.strftime("%Y-%m-%d 15:30")
-    except Exception:
-        return jsonify({"status": "error", "message": "Invalid Date format."})
-
-    results = []
-    # Fast scan top 30 FnO stocks for on-demand offline query
-    scan_list = bot_state["fno_stocks"][:35] if bot_state["fno_stocks"] else []
-    
-    for item in scan_list:
-        time.sleep(0.3)
-        params = {
-            "exchange": "NSE",
-            "symboltoken": str(item["token"]),
-            "interval": "FIVE_MINUTE",
-            "fromdate": from_date,
-            "todate": to_date
-        }
+def market_data_monitor():
+    """Live NIFTY 50 & SENSEX price + % change calculation"""
+    while bot_state["is_logged_in"]:
         try:
-            cand = bot_state["smart_api"].getCandleData(params)
-            if cand and cand.get("status") and cand.get("data"):
-                df = pd.DataFrame(cand["data"], columns=["time", "open", "high", "low", "close", "volume"])
-                
-                # Check 9:15 candle for that target date
-                c1_matches = df[df['time'].str.startswith(f"{target_date}T09:15")]
-                if not c1_matches.empty:
-                    idx = c1_matches.index[0]
-                    if idx >= 20:
-                        prev_avg = df.iloc[idx-20:idx]["volume"].mean()
-                        c1_vol = float(c1_matches.iloc[0]["volume"])
-                        if prev_avg > 0 and (c1_vol >= 5 * prev_avg):
-                            results.append({
-                                "symbol": item["symbol"],
-                                "ratio": round(c1_vol / prev_avg, 2),
-                                "c1_high": float(c1_matches.iloc[0]["high"]),
-                                "c1_low": float(c1_matches.iloc[0]["low"]),
-                                "c1_vol": int(c1_vol),
-                                "avg_vol": int(prev_avg)
-                            })
+            # Nifty 50 Spot (Token 99926000)
+            n_res = bot_state["smart_api"].ltpData("NSE", "NIFTY", "99926000")
+            if n_res and n_res.get("data"):
+                ltp = float(n_res["data"]["ltp"])
+                close = float(n_res["data"].get("close", ltp))
+                change = round(ltp - close, 2)
+                pchange = round((change / close) * 100, 2) if close > 0 else 0.0
+                bot_state["market_indices"]["NIFTY"] = {"ltp": ltp, "change": change, "pchange": pchange}
+
+            # Sensex Spot (Token 99919000 on BSE)
+            s_res = bot_state["smart_api"].ltpData("BSE", "SENSEX", "99919000")
+            if s_res and s_res.get("data"):
+                ltp = float(s_res["data"]["ltp"])
+                close = float(s_res["data"].get("close", ltp))
+                change = round(ltp - close, 2)
+                pchange = round((change / close) * 100, 2) if close > 0 else 0.0
+                bot_state["market_indices"]["SENSEX"] = {"ltp": ltp, "change": change, "pchange": pchange}
         except Exception:
             pass
 
-    return jsonify({"status": "success", "date": target_date, "data": results})
-
-def calculate_quantity(risk, entry, sl):
-    risk_per_share = abs(entry - sl)
-    return 1 if risk_per_share <= 0 else max(1, int(risk / risk_per_share))
-
-def fetch_candles(token, interval="FIVE_MINUTE", days=2):
-    now = datetime.datetime.now()
-    from_date = (now - datetime.timedelta(days=days)).strftime("%Y-%m-%d 09:15")
-    to_date = now.strftime("%Y-%m-%d %H:%M")
-    params = {
-        "exchange": "NSE",
-        "symboltoken": str(token),
-        "interval": interval,
-        "fromdate": from_date,
-        "todate": to_date
-    }
-    try:
-        data = bot_state["smart_api"].getCandleData(params)
-        if data and data.get("status") and data.get("data"):
-            return pd.DataFrame(data["data"], columns=["time", "open", "high", "low", "close", "volume"])
-    except Exception:
-        pass
-    return None
-
-def place_live_order(symbol, token, side, qty):
-    try:
-        order_params = {
-            "variety": "NORMAL",
-            "tradingsymbol": symbol,
-            "symboltoken": str(token),
-            "transactiontype": side,
-            "exchange": "NSE",
-            "ordertype": "MARKET",
-            "producttype": "INTRADAY",
-            "duration": "DAY",
-            "quantity": str(qty)
-        }
-        res = bot_state["smart_api"].placeOrder(order_params)
-        log(f"LIVE ORDER SENT: {side} {qty} {symbol} | Response: {res}")
-        return res
-    except Exception as e:
-        log(f"LIVE ORDER FAILED: {e}")
-        return None
-
-def background_scanner():
-    load_fno_cash_symbols()
-    c1_scanned = False
-    c2_scanned = False
-
-    while bot_state["is_logged_in"]:
-        if not bot_state["engine_running"]:
-            time.sleep(1)
-            continue
-
-        now_time = datetime.datetime.now().time()
-
-        # Step 1: 9:20 AM C1 Volume Check
-        if not c1_scanned and now_time >= datetime.time(9, 20, 2):
-            log("9:20 AM: Scanning C1 5x Volume Breakouts...")
-            qualified = []
-
-            for item in bot_state["fno_stocks"]:
-                time.sleep(0.35)
-                df = fetch_candles(item["token"])
-                if df is not None and len(df) >= 22:
-                    prev_20_vol_avg = df.iloc[-22:-2]["volume"].mean()
-                    c1_candle = df.iloc[-2]
-                    c1_vol = c1_candle["volume"]
-
-                    if prev_20_vol_avg > 0 and (c1_vol >= 5 * prev_20_vol_avg):
-                        ratio = round(c1_vol / prev_20_vol_avg, 2)
-                        qualified.append({
-                            "symbol": item["symbol"],
-                            "token": item["token"],
-                            "c1_high": float(c1_candle["high"]),
-                            "c1_low": float(c1_candle["low"]),
-                            "c1_vol": int(c1_vol),
-                            "avg_vol": int(prev_20_vol_avg),
-                            "ratio": ratio
-                        })
-            bot_state["c1_candidates"] = qualified
-            log(f"C1 Scan Complete: {len(qualified)} stocks matched.")
-            c1_scanned = True
-
-        # Step 2: 9:25 AM C2 Breakout Check & Execution
-        if c1_scanned and not c2_scanned and now_time >= datetime.time(9, 25, 2):
-            log("9:25 AM: Checking C2 Breakout Confirmation...")
-
-            for cand in bot_state["c1_candidates"]:
-                time.sleep(0.35)
-                df = fetch_candles(cand["token"])
-                if df is not None and len(df) >= 2:
-                    c2_candle = df.iloc[-1]
-                    c2_close = float(c2_candle["close"])
-                    c2_high = float(c2_candle["high"])
-                    c2_low = float(c2_candle["low"])
-
-                    side = None
-                    entry = c2_close
-                    sl = 0
-
-                    if c2_close > cand["c1_high"]:
-                        side = "BUY"
-                        sl = c2_low
-                    elif c2_close < cand["c1_low"]:
-                        side = "SELL"
-                        sl = c2_high
-
-                    if side:
-                        risk_pts = abs(entry - sl)
-                        qty = calculate_quantity(bot_state["risk_amount"], entry, sl)
-                        target = round(entry + (2 * risk_pts) if side == "BUY" else entry - (2 * risk_pts), 2)
-                        mode = bot_state["trading_mode"]
-
-                        status = "OPEN"
-                        if mode == "LIVE":
-                            live_res = place_live_order(cand["symbol"], cand["token"], side, qty)
-                            if not live_res:
-                                status = "FAILED"
-
-                        bot_state["active_trades"].append({
-                            "id": len(bot_state["active_trades"]) + 1,
-                            "symbol": cand["symbol"],
-                            "token": cand["token"],
-                            "side": side,
-                            "entry": entry,
-                            "sl": sl,
-                            "target": target,
-                            "qty": qty,
-                            "ltp": entry,
-                            "pnl": 0.0,
-                            "status": status,
-                            "mode": mode,
-                            "time": datetime.datetime.now().strftime("%H:%M:%S")
-                        })
-            c2_scanned = True
-            log("9:25 AM Orders finished.")
-
-        time.sleep(1)
-
-def live_pnl_and_indices_tracker():
-    """Live Nifty / Sensex Fetcher + Trade P&L Monitor"""
-    while bot_state["is_logged_in"]:
-        try:
-            # 1. Fetch Real-time Spot: NIFTY 50 (Token 99926000) & SENSEX (Token 99919000 on BSE)
-            nifty_res = bot_state["smart_api"].ltpData("NSE", "NIFTY", "99926000")
-            if nifty_res and nifty_res.get("data"):
-                bot_state["market_indices"]["NIFTY"] = float(nifty_res["data"]["ltp"])
-
-            sensex_res = bot_state["smart_api"].ltpData("BSE", "SENSEX", "99919000")
-            if sensex_res and sensex_res.get("data"):
-                bot_state["market_indices"]["SENSEX"] = float(sensex_res["data"]["ltp"])
-        except Exception:
-            pass
-
-        # 2. Monitor Open Positions
+        # Real-time open trades P&L tracking
         open_trades = [t for t in bot_state["active_trades"] if t["status"] == "OPEN"]
         for trade in open_trades:
             try:
@@ -346,33 +159,50 @@ def live_pnl_and_indices_tracker():
                 if ltp_data and ltp_data.get("data"):
                     ltp = float(ltp_data["data"]["ltp"])
                     trade["ltp"] = ltp
-
                     if trade["side"] == "BUY":
                         trade["pnl"] = round((ltp - trade["entry"]) * trade["qty"], 2)
-                        if ltp <= trade["sl"]:
-                            trade["status"] = "SL HIT"
-                            if trade["mode"] == "LIVE":
-                                place_live_order(trade["symbol"], trade["token"], "SELL", trade["qty"])
-                        elif ltp >= trade["target"]:
-                            trade["status"] = "TARGET HIT"
-                            if trade["mode"] == "LIVE":
-                                place_live_order(trade["symbol"], trade["token"], "SELL", trade["qty"])
                     else:
                         trade["pnl"] = round((trade["entry"] - ltp) * trade["qty"], 2)
-                        if ltp >= trade["sl"]:
-                            trade["status"] = "SL HIT"
-                            if trade["mode"] == "LIVE":
-                                place_live_order(trade["symbol"], trade["token"], "BUY", trade["qty"])
-                        elif ltp <= trade["target"]:
-                            trade["status"] = "TARGET HIT"
-                            if trade["mode"] == "LIVE":
-                                place_live_order(trade["symbol"], trade["token"], "BUY", trade["qty"])
+            except Exception:
+                pass
+            time.sleep(0.1)
+
+        bot_state["total_pnl"] = round(sum(t["pnl"] for t in bot_state["active_trades"]), 2)
+        time.sleep(2)
+
+def market_stats_scanner():
+    """Top Gainers, Top Losers aur Volume Gainers Scanner"""
+    while bot_state["is_logged_in"]:
+        stock_perf = []
+        scan_pool = bot_state["fno_stocks"][:40]
+
+        for s in scan_pool:
+            try:
+                ltp_data = bot_state["smart_api"].ltpData("NSE", s["symbol"], str(s["token"]))
+                if ltp_data and ltp_data.get("data"):
+                    d = ltp_data["data"]
+                    ltp = float(d["ltp"])
+                    close = float(d.get("close", ltp))
+                    pchange = round(((ltp - close) / close) * 100, 2) if close > 0 else 0.0
+                    vol = int(d.get("trade_volume", 0) or 0)
+                    stock_perf.append({"symbol": s["symbol"].replace("-EQ", ""), "ltp": ltp, "pchange": pchange, "volume": vol})
             except Exception:
                 pass
             time.sleep(0.2)
 
-        bot_state["total_pnl"] = round(sum(t["pnl"] for t in bot_state["active_trades"]), 2)
-        time.sleep(2)
+        if stock_perf:
+            df_perf = pd.DataFrame(stock_perf)
+            # Top Gainers & Losers
+            gainers = df_perf.sort_values(by="pchange", ascending=False).head(5).to_dict('records')
+            losers = df_perf.sort_values(by="pchange", ascending=True).head(5).to_dict('records')
+            # Volume Buzzers
+            volume_top = df_perf.sort_values(by="volume", ascending=False).head(5).to_dict('records')
+
+            bot_state["market_stats"]["top_gainers"] = gainers
+            bot_state["market_stats"]["top_losers"] = losers
+            bot_state["market_stats"]["volume_buzzers"] = volume_top
+
+        time.sleep(25)  # Har 25 second me stats refresh
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
