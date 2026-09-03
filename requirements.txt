@@ -1,0 +1,7 @@
+Flask==3.0.3
+gunicorn==22.0.0
+smartapi-python==1.4.8
+pyotp==2.9.0
+pandas==2.2.2
+requests==2.32.3
+python-dateutil==2.9.0.post0
