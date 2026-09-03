@@ -41,7 +41,7 @@
 
         /* Realtime Market Clock Bar */
         .clock-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
-        .clock-time { font-size: 0.85rem; font-weight: 700; font-family: monospace; letter-spacing: 0.5px; }
+        .clock-time { font-size: 0.82rem; font-weight: 700; font-family: monospace; }
         .mkt-status { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; font-weight: 800; }
         .status-dot { width: 9px; height: 9px; border-radius: 50%; }
         .dot-green { background: #22c55e; box-shadow: 0 0 8px #22c55e; animation: pulse 1.5s infinite; }
@@ -90,6 +90,7 @@
         <button class="theme-btn" onclick="toggleTheme()" id="theme-btn">🌙 Dark Mode</button>
     </div>
 
+    <!-- Real-time Live Market Clock Bar -->
     <div class="clock-card">
         <div class="mkt-status">
             <span class="status-dot dot-red" id="mkt-dot"></span>
@@ -98,6 +99,7 @@
         <div class="clock-time" id="live-clock">--:--:-- --</div>
     </div>
 
+    <!-- 1. LOGIN CARD (FIRST SCREEN) -->
     <div class="card" id="login-card" style="border: 2px solid var(--accent); padding: 18px;">
         <h2 style="font-size: 1.05rem; margin-bottom: 8px; text-align: center;">🔐 Connect Angel One Broker</h2>
         <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px; text-align: center;">Terminal access karne ke liye broker connect karein.</p>
@@ -108,8 +110,10 @@
         <button id="login-btn" style="background: var(--accent); color: white; margin-top: 12px; padding: 11px;" onclick="login()">Connect Broker & Unlock Terminal</button>
     </div>
 
+    <!-- 2. MAIN TERMINAL (UNLOCKS AFTER LOGIN) -->
     <div id="main-terminal" style="display: none;">
         
+        <!-- Live NIFTY / SENSEX -->
         <div class="ticker-bar">
             <div class="ticker-box">
                 <div class="ticker-name">NIFTY 50</div>
@@ -125,6 +129,7 @@
 
         <div class="status-box" id="system-status">Connecting...</div>
 
+        <!-- Engine Control & Net P&L -->
         <div class="card" style="border-left: 4px solid #f59e0b;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                 <div>
@@ -140,6 +145,7 @@
             <button id="btn-engine" onclick="toggleEngine()" style="background: #16a34a; color: white;">🟢 ENGINE RUNNING (Click to Pause)</button>
         </div>
 
+        <!-- BOT CONTROLS -->
         <div class="card">
             <h2>⚙️ Bot Configuration & Limits</h2>
             
@@ -187,6 +193,7 @@
             </div>
         </div>
 
+        <!-- MANUAL SCANNER -->
         <div class="card">
             <h2>🔍 Manual 5x Volume Scanner (F&O Cash Only)</h2>
             <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 8px;">Date select karke 9:15-9:20 AM C1 candle ka 5x Volume breakout scan karein.</p>
@@ -221,6 +228,7 @@
             </div>
         </div>
 
+        <!-- MARKET MOVERS -->
         <div class="card">
             <h2>📊 Market Movers</h2>
             <div class="tabs">
@@ -230,10 +238,11 @@
             </div>
             <table>
                 <thead><tr><th>Symbol</th><th>LTP</th><th>% Change</th></tr></thead>
-                <tbody id="stats-body"><tr><td colspan="3" style="text-align:center; color: var(--text-muted);">Fetching Real Market Data from Angel One...</td></tr></tbody>
+                <tbody id="stats-body"><tr><td colspan="3" style="text-align:center; color: var(--text-muted);">Loading real market data...</td></tr></tbody>
             </table>
         </div>
 
+        <!-- ACTIVE POSITIONS, TRADE HISTORY & SYSTEM LOGS -->
         <div class="card">
             <div class="tabs">
                 <button class="tab-btn active" onclick="switchTradesTab('active', this)">⚡ Active Positions</button>
@@ -271,7 +280,6 @@
 
         document.getElementById('scan-date').value = new Date().toISOString().split('T')[0];
 
-        // Real-time IST Clock & Market Live/Closed Indicator
         function updateLiveClock() {
             const now = new Date();
             const istOptions = { timeZone: "Asia/Kolkata", hour12: true, hour: "2-digit", minute: "2-digit", second: "2-digit" };
@@ -281,28 +289,6 @@
             const dateStr = now.toLocaleDateString("en-GB", dateOptions);
 
             document.getElementById('live-clock').innerText = `${dateStr} | ${timeStr}`;
-
-            // Check Indian Market Hours (Mon-Fri 09:15 AM to 03:30 PM)
-            const day = now.getDay(); // 0 = Sun, 6 = Sat
-            const istHours = parseInt(now.toLocaleTimeString("en-US", { timeZone: "Asia/Kolkata", hour12: false, hour: "2-digit" }));
-            const istMinutes = parseInt(now.toLocaleTimeString("en-US", { timeZone: "Asia/Kolkata", hour12: false, minute: "2-digit" }));
-            const totalMinutes = (istHours * 60) + istMinutes;
-
-            const isWeekday = (day >= 1 && day <= 5);
-            const isMarketOpen = isWeekday && (totalMinutes >= 555 && totalMinutes <= 930); // 9:15 AM (555) to 3:30 PM (930)
-
-            const dot = document.getElementById('mkt-dot');
-            const text = document.getElementById('mkt-text');
-
-            if (isMarketOpen) {
-                dot.className = "status-dot dot-green";
-                text.innerText = "MARKET LIVE";
-                text.style.color = "#16a34a";
-            } else {
-                dot.className = "status-dot dot-red";
-                text.innerText = "MARKET CLOSED";
-                text.style.color = "#ef4444";
-            }
         }
         setInterval(updateLiveClock, 1000);
         updateLiveClock();
@@ -403,6 +389,7 @@
             if(data.status === 'success') {
                 document.getElementById('login-card').style.display = 'none';
                 document.getElementById('main-terminal').style.display = 'block';
+                refresh();
             } else {
                 alert("Login Error: " + data.message);
             }
@@ -486,7 +473,7 @@
             else if(currentStatsTab === 'volume') { list = cachedState.market_stats.volume_buzzers || []; isVol = true; }
 
             if(list.length === 0) {
-                document.getElementById('stats-body').innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Fetching Real Market Data from Angel One...</td></tr>`;
+                document.getElementById('stats-body').innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Fetching real market data from Angel One...</td></tr>`;
                 return;
             }
 
@@ -511,12 +498,25 @@
                     document.getElementById('main-terminal').style.display = 'block';
                 }
 
+                // Accurate Market Live / Closed Indicator
+                const dot = document.getElementById('mkt-dot');
+                const text = document.getElementById('mkt-text');
+                if(data.is_market_live) {
+                    dot.className = "status-dot dot-green";
+                    text.innerText = "MARKET LIVE";
+                    text.style.color = "#16a34a";
+                } else {
+                    dot.className = "status-dot dot-red";
+                    text.innerText = "MARKET CLOSED";
+                    text.style.color = "#ef4444";
+                }
+
                 document.getElementById('system-status').innerText = data.status;
 
                 isEngineRunning = data.engine_running;
                 updateEngineButtonUI(data.engine_running);
 
-                // Live Indices
+                // Tickers
                 if(data.market_indices) {
                     const n = data.market_indices.NIFTY;
                     const s = data.market_indices.SENSEX;
@@ -579,7 +579,7 @@
                     document.getElementById('history-body').innerHTML = histHtml;
                 }
 
-                // Activity Logs Tab
+                // Activity Logs
                 if(data.system_logs && data.system_logs.length > 0) {
                     let logsHtml = '';
                     data.system_logs.slice().reverse().forEach(l => {
