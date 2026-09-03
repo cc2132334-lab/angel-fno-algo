@@ -2,558 +2,527 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Eagle-Eye Quant Engine</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    colors: {
-                        brand: '#2563eb',
-                    }
-                }
-            }
-        }
-    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>⚡ Algo Terminal Pro</title>
     <style>
-        /* Smooth transition for theme switching */
-        body {
-            transition: background-color 0.3s ease, color 0.3s ease;
+        :root {
+            --bg: #f8fafc;
+            --card-bg: #ffffff;
+            --border: #e2e8f0;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --accent: #0284c7;
+            --up: #16a34a;
+            --down: #dc2626;
+            --table-hover: #f1f5f9;
         }
-        .custom-scroll::-webkit-scrollbar {
-            height: 6px;
-            width: 6px;
+
+        [data-theme="dark"] {
+            --bg: #0a0f1d;
+            --card-bg: #131d31;
+            --border: #1e2e4a;
+            --text-main: #f1f5f9;
+            --text-muted: #94a3b8;
+            --accent: #38bdf8;
+            --up: #22c55e;
+            --down: #ef4444;
+            --table-hover: #17243c;
         }
-        .custom-scroll::-webkit-scrollbar-thumb {
-            background-color: #cbd5e1;
-            border-radius: 4px;
-        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background: var(--bg); color: var(--text-main); padding: 12px; padding-bottom: 70px; }
+        .card { background: var(--card-bg); border-radius: 12px; padding: 14px; margin-bottom: 12px; border: 1px solid var(--border); }
+        h2 { font-size: 0.92rem; color: var(--accent); margin-bottom: 8px; text-transform: uppercase; }
+        input, select, button { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text-main); margin-top: 6px; font-size: 0.9rem; }
+        button { font-weight: bold; border: none; cursor: pointer; }
+        
+        .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .theme-btn { background: var(--card-bg); border: 1px solid var(--border); padding: 6px 12px; border-radius: 20px; font-size: 0.8rem; cursor: pointer; width: auto; margin: 0; }
+        
+        .ticker-bar { display: flex; gap: 8px; margin-bottom: 12px; }
+        .ticker-box { flex: 1; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; text-align: center; }
+        .ticker-name { font-size: 0.72rem; color: var(--text-muted); }
+        .ticker-val { font-size: 1.15rem; font-weight: bold; margin-top: 2px; }
+        .ticker-chg { font-size: 0.78rem; font-weight: bold; margin-top: 2px; }
+
+        .status-box { background: rgba(56, 189, 248, 0.08); color: var(--accent); padding: 10px; border-radius: 8px; font-size: 0.8rem; font-family: monospace; border: 1px dashed var(--accent); margin-bottom: 12px; }
+
+        .tabs { display: flex; gap: 6px; margin-bottom: 10px; overflow-x: auto; }
+        .tab-btn { flex: 1; padding: 8px; font-size: 0.75rem; background: var(--card-bg); border: 1px solid var(--border); color: var(--text-muted); border-radius: 6px; white-space: nowrap; margin-top: 0; }
+        .tab-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
+
+        table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 6px; }
+        th, td { padding: 8px 4px; text-align: left; border-bottom: 1px solid var(--border); }
+        th { color: var(--text-muted); }
+        tr:hover { background: var(--table-hover); }
+
+        .up-text { color: var(--up); }
+        .down-text { color: var(--down); }
+        .tag-buy { color: var(--up); background: rgba(34, 197, 94, 0.15); padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+        .tag-sell { color: var(--down); background: rgba(239, 68, 68, 0.15); padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+        .highlight-vol { background: rgba(56, 189, 248, 0.2); color: var(--accent); padding: 2px 6px; border-radius: 4px; font-weight: bold; }
     </style>
 </head>
-<body class="bg-slate-50 text-slate-800 antialiased min-h-screen">
+<body data-theme="light">
 
-    <nav class="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="flex items-center justify-between h-16">
-                
-                <div class="flex items-center space-x-3">
-                    <div class="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white font-black text-xl shadow-md">
-                        <i class="fa-solid fa-chart-line"></i>
-                    </div>
-                    <div>
-                        <h1 class="text-lg font-bold text-slate-900 tracking-tight leading-none">EAGLE-EYE QUANT</h1>
-                        <p class="text-xs text-slate-500 font-medium mt-1">C1 5x Vol + PDH/PDL Engine</p>
-                    </div>
-                </div>
+    <div class="header-bar">
+        <h1 style="font-size: 1.1rem; font-weight: 800;">⚡ ALGO PRO TERMINAL</h1>
+        <button class="theme-btn" onclick="toggleTheme()" id="theme-btn">🌙 Dark Mode</button>
+    </div>
 
-                <div class="flex items-center space-x-2 sm:space-x-4">
-                    <div id="angel-badge-container" class="flex items-center space-x-2 px-3 py-1.5 rounded-full border border-amber-200 bg-amber-50 text-amber-700 text-xs font-semibold">
-                        <span class="w-2 h-2 rounded-full bg-amber-500 animate-pulse" id="angel-dot"></span>
-                        <span id="angel-badge-text">WAITING LOGIN</span>
-                    </div>
+    <!-- 1. LOGIN CARD (FIRST SCREEN) -->
+    <div class="card" id="login-card" style="border: 2px solid var(--accent); padding: 18px;">
+        <h2 style="font-size: 1.05rem; margin-bottom: 8px; text-align: center;">🔐 Connect Angel One Broker</h2>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px; text-align: center;">Terminal access karne ke liye broker connect karein.</p>
+        <input type="text" id="api_key" placeholder="SmartAPI Key">
+        <input type="text" id="client_code" placeholder="Client ID">
+        <input type="password" id="pin" placeholder="MPIN">
+        <input type="password" id="totp_secret" placeholder="TOTP Secret Key">
+        <button id="login-btn" style="background: var(--accent); color: white; margin-top: 12px; padding: 11px;" onclick="login()">Connect Broker & Unlock Terminal</button>
+    </div>
 
-                    <button id="engine-btn" onclick="toggleEngine()" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition">
-                        <i class="fa-solid fa-power-off mr-1"></i> <span id="engine-btn-text">ENGINE ON</span>
-                    </button>
-
-                    <button onclick="toggleTheme()" class="p-2 text-slate-500 hover:text-slate-800 rounded-lg border border-slate-200 hover:bg-slate-100 transition">
-                        <i id="theme-icon" class="fa-solid fa-moon"></i>
-                    </button>
-                </div>
+    <!-- 2. MAIN TERMINAL (UNLOCKS AFTER LOGIN) -->
+    <div id="main-terminal" style="display: none;">
+        
+        <!-- Live NIFTY / SENSEX -->
+        <div class="ticker-bar">
+            <div class="ticker-box">
+                <div class="ticker-name">NIFTY 50</div>
+                <div class="ticker-val" id="nifty-spot">--</div>
+                <div class="ticker-chg" id="nifty-chg">0.00 (0.00%)</div>
             </div>
-        </div>
-    </nav>
-
-    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
-                <div>
-                    <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Nifty 50 Spot</div>
-                    <div class="text-xl font-bold text-slate-900 mt-1" id="nifty-ltp">--</div>
-                </div>
-                <div id="nifty-change" class="text-xs font-bold px-2 py-1 rounded bg-slate-100 text-slate-600">--</div>
-            </div>
-
-            <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
-                <div>
-                    <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Sensex Spot</div>
-                    <div class="text-xl font-bold text-slate-900 mt-1" id="sensex-ltp">--</div>
-                </div>
-                <div id="sensex-change" class="text-xs font-bold px-2 py-1 rounded bg-slate-100 text-slate-600">--</div>
-            </div>
-
-            <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
-                <div>
-                    <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider">F&O Pool Tracked</div>
-                    <div class="text-xl font-bold text-blue-600 mt-1" id="stocks-count">0 Stocks</div>
-                </div>
-                <div class="w-10 h-10 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
-                    <i class="fa-solid fa-layer-group"></i>
-                </div>
-            </div>
-
-            <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
-                <div>
-                    <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Net PnL</div>
-                    <div class="text-xl font-bold text-slate-900 mt-1" id="total-pnl">₹ 0.00</div>
-                </div>
-                <div id="pnl-badge" class="text-xs font-bold px-2.5 py-1 rounded bg-slate-100 text-slate-600">0 Trades</div>
+            <div class="ticker-box">
+                <div class="ticker-name">SENSEX</div>
+                <div class="ticker-val" id="sensex-spot">--</div>
+                <div class="ticker-chg" id="sensex-chg">0.00 (0.00%)</div>
             </div>
         </div>
 
-        <div class="bg-blue-50 border-l-4 border-blue-600 p-3.5 rounded-lg flex items-center space-x-3 text-sm text-blue-900 shadow-sm">
-            <i class="fa-solid fa-info-circle text-blue-600 text-base"></i>
-            <span class="font-medium" id="terminal-log">Connecting to Quant Server...</span>
-        </div>
+        <div class="status-box" id="system-status">Terminal Active.</div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-            <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4">
-                <div class="flex items-center justify-between border-b pb-3 border-slate-100">
-                    <h2 class="text-sm font-bold text-slate-900 flex items-center">
-                        <i class="fa-solid fa-key text-blue-600 mr-2"></i> Angel One Login
-                    </h2>
-                    <span class="text-xs font-medium text-slate-400">TOTP Auth</span>
-                </div>
-                <form id="login-form" onsubmit="handleLogin(event)" class="space-y-3">
-                    <div>
-                        <label class="block text-xs font-medium text-slate-600 mb-1">API Key</label>
-                        <input type="text" id="api_key" required class="w-full px-3 py-2 text-xs border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none border-slate-300">
-                    </div>
-                    <div class="grid grid-cols-2 gap-2">
-                        <div>
-                            <label class="block text-xs font-medium text-slate-600 mb-1">Client Code</label>
-                            <input type="text" id="client_code" required class="w-full px-3 py-2 text-xs border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none border-slate-300">
-                        </div>
-                        <div>
-                            <label class="block text-xs font-medium text-slate-600 mb-1">PIN</label>
-                            <input type="password" id="pin" required class="w-full px-3 py-2 text-xs border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none border-slate-300">
-                        </div>
-                    </div>
-                    <div>
-                        <label class="block text-xs font-medium text-slate-600 mb-1">TOTP Secret Key</label>
-                        <input type="password" id="totp_secret" required class="w-full px-3 py-2 text-xs border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none border-slate-300">
-                    </div>
-                    <button type="submit" id="login-submit-btn" class="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition shadow-sm">
-                        Connect Broker
-                    </button>
-                </form>
-            </div>
-
-            <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4">
-                <div class="flex items-center justify-between border-b pb-3 border-slate-100">
-                    <h2 class="text-sm font-bold text-slate-900 flex items-center">
-                        <i class="fa-solid fa-sliders text-blue-600 mr-2"></i> Trade Parameters
-                    </h2>
-                    <div class="flex items-center bg-slate-100 p-1 rounded-lg">
-                        <button onclick="setMode('PAPER')" id="btn-paper" class="px-2.5 py-1 text-xs font-bold rounded-md bg-white text-blue-600 shadow-sm">PAPER</button>
-                        <button onclick="setMode('LIVE')" id="btn-live" class="px-2.5 py-1 text-xs font-bold rounded-md text-slate-500">LIVE</button>
-                    </div>
-                </div>
-                <form id="settings-form" onsubmit="handleSettings(event)" class="space-y-3">
-                    <div class="grid grid-cols-2 gap-3">
-                        <div>
-                            <label class="block text-xs font-medium text-slate-600 mb-1">Risk / Trade (₹)</label>
-                            <input type="number" id="risk_amount" value="500" class="w-full px-3 py-2 text-xs border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none border-slate-300">
-                        </div>
-                        <div>
-                            <label class="block text-xs font-medium text-slate-600 mb-1">Max Trades/Day</label>
-                            <input type="number" id="max_trades" value="3" class="w-full px-3 py-2 text-xs border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none border-slate-300">
-                        </div>
-                    </div>
-                    <div class="grid grid-cols-2 gap-3">
-                        <div>
-                            <label class="block text-xs font-medium text-slate-600 mb-1">Target (R:R Ratio)</label>
-                            <select id="rr_ratio" class="w-full px-3 py-2 text-xs border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none border-slate-300">
-                                <option value="2">1 : 2</option>
-                                <option value="3" selected>1 : 3</option>
-                                <option value="4">1 : 4</option>
-                                <option value="5">1 : 5</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-xs font-medium text-slate-600 mb-1">Cut-Off Time</label>
-                            <input type="time" id="cutoff_time" value="15:00" class="w-full px-3 py-2 text-xs border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none border-slate-300">
-                        </div>
-                    </div>
-                    <button type="submit" class="w-full py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold transition shadow-sm">
-                        Save Risk Rules
-                    </button>
-                </form>
-            </div>
-
-            <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-3">
-                <div class="border-b pb-2.5 border-slate-100 flex items-center justify-between">
-                    <h2 class="text-sm font-bold text-slate-900 flex items-center">
-                        <i class="fa-solid fa-arrows-up-down text-blue-600 mr-2"></i> FnO Movers
-                    </h2>
-                    <span class="text-xs text-slate-400 font-medium">Auto-Synced</span>
-                </div>
-                <div class="grid grid-cols-2 gap-3 text-xs">
-                    <div>
-                        <div class="font-bold text-emerald-600 mb-2 flex items-center">
-                            <i class="fa-solid fa-arrow-trend-up mr-1"></i> Top Gainers
-                        </div>
-                        <ul id="gainers-list" class="space-y-1.5 text-slate-600">
-                            <li class="text-slate-400">Loading...</li>
-                        </ul>
-                    </div>
-                    <div>
-                        <div class="font-bold text-rose-600 mb-2 flex items-center">
-                            <i class="fa-solid fa-arrow-trend-down mr-1"></i> Top Losers
-                        </div>
-                        <ul id="losers-list" class="space-y-1.5 text-slate-600">
-                            <li class="text-slate-400">Loading...</li>
-                        </ul>
-                    </div>
-                </div>
-            </div>
-
-        </div>
-
-        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-            <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+        <!-- Engine Control & Net P&L -->
+        <div class="card" style="border-left: 4px solid #f59e0b;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                 <div>
-                    <h2 class="text-sm font-bold text-slate-900">09:20 AM C1 Candidates (5x Vol + PDH/PDL Breakout)</h2>
-                    <p class="text-xs text-slate-400 mt-0.5">These stocks passed C1 filters and are being monitored for 09:25 AM C2 Confirmation</p>
+                    <span style="font-size: 0.72rem; color: var(--text-muted);">REALIZED TODAY'S P&L</span>
+                    <div id="pnl-display" style="font-size: 1.3rem; font-weight: bold; color: var(--text-muted);">₹0.00</div>
                 </div>
-                <span id="c1-badge" class="px-2.5 py-1 text-xs font-semibold rounded-full bg-blue-50 text-blue-600">0 Found</span>
+                <div id="mode-badge" style="font-size: 0.75rem; font-weight: bold; color: var(--accent);">SIMULATION MODE</div>
             </div>
-            <div class="overflow-x-auto custom-scroll">
-                <table class="w-full text-left text-xs text-slate-600">
-                    <thead class="bg-slate-50 text-slate-500 uppercase font-semibold border-b border-slate-100">
-                        <tr>
-                            <th class="px-5 py-3">Symbol</th>
-                            <th class="px-5 py-3">Bias Setup</th>
-                            <th class="px-5 py-3">C1 High</th>
-                            <th class="px-5 py-3">C1 Low</th>
-                            <th class="px-5 py-3">C1 Close</th>
-                            <th class="px-5 py-3">PDH / PDL</th>
-                            <th class="px-5 py-3">Volume Spike</th>
-                        </tr>
-                    </thead>
-                    <tbody id="c1-table-body" class="divide-y divide-slate-100 font-medium">
-                        <tr>
-                            <td colspan="7" class="px-5 py-6 text-center text-slate-400">No C1 breakout candidates yet. Scan runs at 09:20:02 AM IST.</td>
-                        </tr>
-                    </tbody>
+            <div style="display: flex; gap: 8px; margin-bottom: 10px;">
+                <button id="btn-paper" onclick="switchMode('PAPER')" style="flex: 1; background: #0284c7; color: white;">📝 Paper Mode</button>
+                <button id="btn-live" onclick="switchMode('LIVE')" style="flex: 1; background: var(--border); color: var(--text-muted);">🔴 Live Mode</button>
+            </div>
+            <button id="btn-engine" onclick="toggleEngine()" style="background: #16a34a; color: white;">🟢 ENGINE RUNNING (Click to Pause)</button>
+        </div>
+
+        <!-- BOT CONTROLS -->
+        <div class="card">
+            <h2>⚙️ Bot Configuration & Limits</h2>
+            
+            <div class="grid-2">
+                <div>
+                    <label style="font-size: 0.75rem; color: var(--text-muted);">Max Trades Per Day</label>
+                    <select id="max-trades" onchange="syncSettings()">
+                        <option value="1">1 Trade</option>
+                        <option value="2">2 Trades</option>
+                        <option value="3" selected>3 Trades</option>
+                        <option value="5">5 Trades</option>
+                        <option value="10">10 Trades</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="font-size: 0.75rem; color: var(--text-muted);">Cutoff Time Window</label>
+                    <select id="cutoff-time" onchange="syncSettings()">
+                        <option value="10:00">Till 10:00 AM</option>
+                        <option value="10:30">Till 10:30 AM</option>
+                        <option value="11:00">Till 11:00 AM</option>
+                        <option value="11:30">Till 11:30 AM</option>
+                        <option value="12:00">Till 12:00 PM</option>
+                        <option value="13:00">Till 01:00 PM</option>
+                        <option value="14:00">Till 02:00 PM</option>
+                        <option value="15:00" selected>Till 03:00 PM</option>
+                        <option value="15:30">Till 03:30 PM (Close)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div style="margin-top: 10px;">
+                <div style="display: flex; justify-content: space-between;">
+                    <label style="font-size: 0.75rem; color: var(--text-muted);">Target Book Ratio (Trail from 1:2):</label>
+                    <span id="rr-label" style="font-weight: bold; color: var(--accent);">1:3</span>
+                </div>
+                <input type="range" id="rr-slider" min="1" max="10" step="1" value="3" oninput="updateRR(this.value)" onchange="syncSettings()">
+            </div>
+
+            <div style="margin-top: 10px;">
+                <div style="display: flex; justify-content: space-between;">
+                    <label style="font-size: 0.75rem; color: var(--text-muted);">Risk Per Signal:</label>
+                    <span id="risk-label" style="font-weight: bold; color: var(--up);">₹500</span>
+                </div>
+                <input type="range" id="risk-slider" min="50" max="5000" step="50" value="500" oninput="updateRisk(this.value)" onchange="syncSettings()">
+            </div>
+        </div>
+
+        <!-- MANUAL SCANNER -->
+        <div class="card">
+            <h2>🔍 Manual 5x Volume Scanner (F&O Cash Only)</h2>
+            <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 8px;">Date select karke 9:15-9:20 AM C1 candle ka 5x Volume breakout scan karein.</p>
+            
+            <div class="grid-2">
+                <div>
+                    <label style="font-size: 0.72rem; color: var(--text-muted);">Select Date for Analysis</label>
+                    <input type="date" id="scan-date">
+                </div>
+                <div style="display: flex; align-items: flex-end;">
+                    <button onclick="runManual5xScan()" id="btn-scan" style="background: var(--accent); color: white;">🚀 Scan 5x Volume</button>
+                </div>
+            </div>
+            
+            <div id="manual-scan-results" style="margin-top: 12px; display: none;">
+                <div id="scan-summary" style="font-size: 0.78rem; font-weight: bold; margin-bottom: 6px; color: var(--accent);"></div>
+                <div style="max-height: 220px; overflow-y: auto;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>C1 High</th>
+                                <th>C1 Low</th>
+                                <th>C1 Vol</th>
+                                <th>Avg Vol</th>
+                                <th>Burst</th>
+                            </tr>
+                        </thead>
+                        <tbody id="manual-scan-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- MARKET MOVERS (GAINERS, LOSERS, VOLUME BUZZERS) -->
+        <div class="card">
+            <h2>📊 Market Movers</h2>
+            <div class="tabs">
+                <button class="tab-btn active" onclick="switchStatsTab('gainers', this)">🚀 Top Gainers</button>
+                <button class="tab-btn" onclick="switchStatsTab('losers', this)">🔻 Top Losers</button>
+                <button class="tab-btn" onclick="switchStatsTab('volume', this)">🔥 Volume Buzzers</button>
+            </div>
+            <table>
+                <thead><tr><th>Symbol</th><th>LTP</th><th>% Change</th></tr></thead>
+                <tbody id="stats-body"><tr><td colspan="3" style="text-align:center; color: var(--text-muted);">Loading live market stats...</td></tr></tbody>
+            </table>
+        </div>
+
+        <!-- ACTIVE POSITIONS & TRADE HISTORY -->
+        <div class="card">
+            <div class="tabs">
+                <button class="tab-btn active" onclick="switchTradesTab('active', this)">⚡ Active Positions</button>
+                <button class="tab-btn" onclick="switchTradesTab('history', this)">📜 Trade History</button>
+            </div>
+
+            <div id="active-view">
+                <table>
+                    <thead><tr><th>Symbol</th><th>Side</th><th>Entry</th><th>SL</th><th>Qty</th><th>P&L</th><th>Status</th></tr></thead>
+                    <tbody id="active-body"><tr><td colspan="7" style="text-align:center; color: var(--text-muted);">No open positions</td></tr></tbody>
+                </table>
+            </div>
+
+            <div id="history-view" style="display: none;">
+                <table>
+                    <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Entry → Exit</th><th>P&L</th><th>Result</th></tr></thead>
+                    <tbody id="history-body"><tr><td colspan="6" style="text-align:center; color: var(--text-muted);">No closed trades yet</td></tr></tbody>
                 </table>
             </div>
         </div>
 
-        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-            <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-                <div>
-                    <h2 class="text-sm font-bold text-slate-900">Active Positions (C2 Triggered)</h2>
-                    <p class="text-xs text-slate-400 mt-0.5">Automatic 1:2 Milestone (50% book & SL to Cost) + Trailing Target Execution</p>
-                </div>
-                <span id="active-trades-badge" class="px-2.5 py-1 text-xs font-semibold rounded-full bg-emerald-50 text-emerald-600">0 Open</span>
-            </div>
-            <div class="overflow-x-auto custom-scroll">
-                <table class="w-full text-left text-xs text-slate-600">
-                    <thead class="bg-slate-50 text-slate-500 uppercase font-semibold border-b border-slate-100">
-                        <tr>
-                            <th class="px-4 py-3">Symbol</th>
-                            <th class="px-4 py-3">Side</th>
-                            <th class="px-4 py-3">Qty</th>
-                            <th class="px-4 py-3">Entry</th>
-                            <th class="px-4 py-3">Current SL</th>
-                            <th class="px-4 py-3">Target</th>
-                            <th class="px-4 py-3">LTP</th>
-                            <th class="px-4 py-3">PnL</th>
-                            <th class="px-4 py-3">Status</th>
-                        </tr>
-                    </thead>
-                    <tbody id="active-trades-body" class="divide-y divide-slate-100 font-medium">
-                        <tr>
-                            <td colspan="9" class="px-5 py-6 text-center text-slate-400">No active positions open right now.</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-            <div class="px-5 py-3.5 border-b border-slate-100">
-                <h2 class="text-sm font-bold text-slate-900">Executed Trade History (Today)</h2>
-            </div>
-            <div class="overflow-x-auto custom-scroll">
-                <table class="w-full text-left text-xs text-slate-600">
-                    <thead class="bg-slate-50 text-slate-500 uppercase font-semibold border-b border-slate-100">
-                        <tr>
-                            <th class="px-4 py-2.5">Time</th>
-                            <th class="px-4 py-2.5">Symbol</th>
-                            <th class="px-4 py-2.5">Side</th>
-                            <th class="px-4 py-2.5">Entry</th>
-                            <th class="px-4 py-2.5">Exit</th>
-                            <th class="px-4 py-2.5">Net PnL</th>
-                            <th class="px-4 py-2.5">Exit Reason</th>
-                        </tr>
-                    </thead>
-                    <tbody id="history-body" class="divide-y divide-slate-100">
-                        <tr>
-                            <td colspan="7" class="px-5 py-4 text-center text-slate-400">History will appear here after trades exit.</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-    </main>
+    </div>
 
     <script>
-        let currentMode = 'PAPER';
+        let currentStatsTab = 'gainers';
+        let isEngineRunning = true;
+        let cachedState = null;
 
-        // Theme management
+        document.getElementById('scan-date').value = new Date().toISOString().split('T')[0];
+
         function toggleTheme() {
-            const html = document.documentElement;
-            const icon = document.getElementById('theme-icon');
-            if (html.classList.contains('dark')) {
-                html.classList.remove('dark');
-                icon.classList.remove('fa-sun');
-                icon.classList.add('fa-moon');
-                localStorage.setItem('theme', 'light');
+            const body = document.body;
+            const btn = document.getElementById('theme-btn');
+            if (body.getAttribute('data-theme') === 'dark') {
+                body.setAttribute('data-theme', 'light');
+                btn.innerText = '🌙 Dark Mode';
             } else {
-                html.classList.add('dark');
-                icon.classList.remove('fa-moon');
-                icon.classList.add('fa-sun');
-                localStorage.setItem('theme', 'dark');
+                body.setAttribute('data-theme', 'dark');
+                btn.innerText = '☀️ Light Mode';
             }
         }
 
-        // Login Submission
-        async function handleLogin(e) {
-            e.preventDefault();
-            const btn = document.getElementById('login-submit-btn');
-            btn.innerText = "Authenticating...";
-            btn.disabled = true;
+        function updateRR(val) { document.getElementById('rr-label').innerText = '1:' + val; }
+        function updateRisk(val) { document.getElementById('risk-label').innerText = '₹' + val; }
 
+        async function syncSettings() {
             const payload = {
-                api_key: document.getElementById('api_key').value.trim(),
-                client_code: document.getElementById('client_code').value.trim(),
-                pin: document.getElementById('pin').value.trim(),
-                totp_secret: document.getElementById('totp_secret').value.trim()
-            };
-
-            try {
-                const res = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(payload)
-                });
-                const data = await res.json();
-                if (data.status === 'success') {
-                    alert('Login Successful! F&O Universe Loading...');
-                } else {
-                    alert('Login Failed: ' + data.message);
-                }
-            } catch (err) {
-                alert('Connection error: ' + err);
-            } finally {
-                btn.innerText = "Connect Broker";
-                btn.disabled = false;
-            }
-        }
-
-        // Settings Submission
-        async function handleSettings(e) {
-            e.preventDefault();
-            const payload = {
-                risk_amount: document.getElementById('risk_amount').value,
-                max_trades: document.getElementById('max_trades').value,
-                rr_ratio: document.getElementById('rr_ratio').value,
-                cutoff_time: document.getElementById('cutoff_time').value
+                max_trades: document.getElementById('max-trades').value,
+                cutoff_time: document.getElementById('cutoff-time').value,
+                rr_ratio: document.getElementById('rr-slider').value,
+                risk_amount: document.getElementById('risk-slider').value
             };
             await fetch('/api/update-settings', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(payload)
             });
-            alert('Settings Saved Successfully!');
         }
 
-        // Mode switch
-        async function setMode(mode) {
-            await fetch('/api/set-mode', {
+        async function runManual5xScan() {
+            const dateVal = document.getElementById('scan-date').value;
+            if(!dateVal) return alert("Please select a date first");
+
+            const scanBtn = document.getElementById('btn-scan');
+            scanBtn.innerText = "Scanning...";
+            scanBtn.disabled = true;
+
+            const res = await fetch('/api/manual-5x-scan', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({mode})
+                body: JSON.stringify({date: dateVal})
             });
-            updateModeUI(mode);
-        }
+            const data = await res.json();
+            scanBtn.innerText = "🚀 Scan 5x Volume";
+            scanBtn.disabled = false;
 
-        function updateModeUI(mode) {
-            currentMode = mode;
-            const bPaper = document.getElementById('btn-paper');
-            const bLive = document.getElementById('btn-live');
-            if (mode === 'LIVE') {
-                bLive.className = "px-2.5 py-1 text-xs font-bold rounded-md bg-rose-600 text-white shadow-sm";
-                bPaper.className = "px-2.5 py-1 text-xs font-bold rounded-md text-slate-500";
+            if(data.status === 'success') {
+                const container = document.getElementById('manual-scan-results');
+                container.style.display = 'block';
+                document.getElementById('scan-summary').innerText = `Date: ${data.date} | Found: ${data.count} stocks with >= 5x Volume in C1`;
+
+                if(data.results.length === 0) {
+                    document.getElementById('manual-scan-body').innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No stock met >= 5x C1 volume criteria on this date</td></tr>`;
+                    return;
+                }
+
+                let html = '';
+                data.results.forEach(r => {
+                    html += `<tr>
+                        <td><b>${r.symbol}</b></td>
+                        <td>₹${r.c1_high}</td>
+                        <td>₹${r.c1_low}</td>
+                        <td>${r.c1_volume.toLocaleString()}</td>
+                        <td>${r.avg_volume.toLocaleString()}</td>
+                        <td><span class="highlight-vol">${r.multiplier}x</span></td>
+                    </tr>`;
+                });
+                document.getElementById('manual-scan-body').innerHTML = html;
             } else {
-                bPaper.className = "px-2.5 py-1 text-xs font-bold rounded-md bg-white text-blue-600 shadow-sm";
-                bLive.className = "px-2.5 py-1 text-xs font-bold rounded-md text-slate-500";
+                alert(data.message);
             }
         }
 
-        // Engine Toggle
-        async function toggleEngine() {
-            const btn = document.getElementById('engine-btn-text');
-            const isCurrentlyRunning = btn.innerText.includes('ON');
-            await fetch('/api/toggle-engine', {
+        async function login() {
+            const payload = {
+                api_key: document.getElementById('api_key').value.trim(),
+                client_code: document.getElementById('client_code').value.trim(),
+                pin: document.getElementById('pin').value.trim(),
+                totp_secret: document.getElementById('totp_secret').value.trim()
+            };
+            const btn = document.getElementById('login-btn');
+            btn.innerText = "Verifying...";
+            btn.disabled = true;
+
+            const res = await fetch('/api/login', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({running: !isCurrentlyRunning})
+                body: JSON.stringify(payload)
             });
+            const data = await res.json();
+            btn.innerText = "Connect Broker & Unlock Terminal";
+            btn.disabled = false;
+
+            if(data.status === 'success') {
+                document.getElementById('login-card').style.display = 'none';
+                document.getElementById('main-terminal').style.display = 'block';
+            } else {
+                alert("Login Error: " + data.message);
+            }
         }
 
-        // Main State Poller
-        async function fetchState() {
+        async function toggleEngine() {
+            isEngineRunning = !isEngineRunning;
+            const res = await fetch('/api/toggle-engine', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({running: isEngineRunning})
+            });
+            const data = await res.json();
+            updateEngineButtonUI(data.engine_running);
+        }
+
+        function updateEngineButtonUI(running) {
+            const btn = document.getElementById('btn-engine');
+            if(running) {
+                btn.innerText = "🟢 ENGINE RUNNING (Click to Pause)";
+                btn.style.background = "#16a34a";
+            } else {
+                btn.innerText = "🛑 ENGINE PAUSED (Click to Resume)";
+                btn.style.background = "#dc2626";
+            }
+        }
+
+        async function switchMode(mode) {
+            if (mode === 'LIVE' && !confirm("⚠️ CAUTION: Real money orders will be placed. Confirm?")) return;
+            const res = await fetch('/api/set-mode', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({mode: mode})
+            });
+            const data = await res.json();
+            if(data.status === 'success') {
+                const bPaper = document.getElementById('btn-paper');
+                const bLive = document.getElementById('btn-live');
+                const badge = document.getElementById('mode-badge');
+                if(mode === 'LIVE') {
+                    bLive.style.background = '#dc2626'; bLive.style.color = '#fff';
+                    bPaper.style.background = 'var(--border)'; bPaper.style.color = 'var(--text-muted)';
+                    badge.innerText = '🔴 REAL TRADING'; badge.style.color = '#ef4444';
+                } else {
+                    bPaper.style.background = '#0284c7'; bPaper.style.color = '#fff';
+                    bLive.style.background = 'var(--border)'; bLive.style.color = 'var(--text-muted)';
+                    badge.innerText = '📝 SIMULATION MODE'; badge.style.color = 'var(--accent)';
+                }
+            }
+        }
+
+        function switchStatsTab(tab, btn) {
+            currentStatsTab = tab;
+            document.querySelectorAll('.tabs button').forEach(b => {
+                if(b.parentNode === btn.parentNode) b.classList.remove('active');
+            });
+            btn.classList.add('active');
+            renderStats();
+        }
+
+        function switchTradesTab(tab, btn) {
+            document.querySelectorAll('.tabs button').forEach(b => {
+                if(b.parentNode === btn.parentNode) b.classList.remove('active');
+            });
+            btn.classList.add('active');
+            if(tab === 'active') {
+                document.getElementById('active-view').style.display = 'block';
+                document.getElementById('history-view').style.display = 'none';
+            } else {
+                document.getElementById('active-view').style.display = 'none';
+                document.getElementById('history-view').style.display = 'block';
+            }
+        }
+
+        function renderStats() {
+            if(!cachedState || !cachedState.market_stats) return;
+            let list = [];
+            let isVol = false;
+            if(currentStatsTab === 'gainers') list = cachedState.market_stats.top_gainers || [];
+            else if(currentStatsTab === 'losers') list = cachedState.market_stats.top_losers || [];
+            else if(currentStatsTab === 'volume') { list = cachedState.market_stats.volume_buzzers || []; isVol = true; }
+
+            if(list.length === 0) {
+                document.getElementById('stats-body').innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Fetching market data...</td></tr>`;
+                return;
+            }
+
+            let html = '';
+            list.forEach(item => {
+                const cls = item.pchange >= 0 ? 'up-text' : 'down-text';
+                const sign = item.pchange >= 0 ? '+' : '';
+                const extra = isVol ? `<br><small style="color:var(--text-muted)">Vol: ${item.volume.toLocaleString()}</small>` : '';
+                html += `<tr><td><b>${item.symbol}</b>${extra}</td><td>₹${item.ltp}</td><td class="${cls}"><b>${sign}${item.pchange}%</b></td></tr>`;
+            });
+            document.getElementById('stats-body').innerHTML = html;
+        }
+
+        async function refresh() {
             try {
                 const res = await fetch('/api/state');
                 const data = await res.json();
+                cachedState = data;
 
-                // 1. UPDATE ANGEL ONE BADGE (Connected vs Waiting)
-                const isConn = data.logged_in || data.is_logged_in || data.broker_connected;
-                const badgeContainer = document.getElementById('angel-badge-container');
-                const badgeText = document.getElementById('angel-badge-text');
-                const badgeDot = document.getElementById('angel-dot');
-
-                if (isConn) {
-                    badgeContainer.className = "flex items-center space-x-2 px-3 py-1.5 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700 text-xs font-semibold";
-                    badgeDot.className = "w-2 h-2 rounded-full bg-emerald-500";
-                    badgeText.innerText = "CONNECTED";
-                } else {
-                    badgeContainer.className = "flex items-center space-x-2 px-3 py-1.5 rounded-full border border-amber-200 bg-amber-50 text-amber-700 text-xs font-semibold";
-                    badgeDot.className = "w-2 h-2 rounded-full bg-amber-500 animate-pulse";
-                    badgeText.innerText = "WAITING LOGIN";
+                // Sync Login State properly
+                if(data.logged_in || data.is_logged_in || data.broker_connected) {
+                    document.getElementById('login-card').style.display = 'none';
+                    document.getElementById('main-terminal').style.display = 'block';
                 }
 
-                // 2. ENGINE BUTTON
-                const engBtn = document.getElementById('engine-btn');
-                const engText = document.getElementById('engine-btn-text');
-                if (data.engine_running) {
-                    engBtn.className = "px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition";
-                    engText.innerText = "ENGINE ON";
-                } else {
-                    engBtn.className = "px-3 py-1.5 rounded-lg bg-slate-400 hover:bg-slate-500 text-white text-xs font-semibold shadow-sm transition";
-                    engText.innerText = "ENGINE OFF";
-                }
+                document.getElementById('system-status').innerText = data.status;
 
-                // 3. TERMINAL LOG & STOCKS COUNT
-                document.getElementById('terminal-log').innerText = data.status || "Running...";
-                document.getElementById('stocks-count').innerText = `${data.stocks_loaded_count || 0} Stocks`;
+                isEngineRunning = data.engine_running;
+                updateEngineButtonUI(data.engine_running);
 
-                // 4. SPOT INDICES
-                if (data.market_indices) {
+                // Tickers
+                if(data.market_indices) {
                     const n = data.market_indices.NIFTY;
                     const s = data.market_indices.SENSEX;
-                    if (n && n.ltp > 0) {
-                        document.getElementById('nifty-ltp').innerText = n.ltp.toFixed(2);
-                        const nEl = document.getElementById('nifty-change');
-                        nEl.innerText = `${n.change > 0 ? '+' : ''}${n.change} (${n.pchange}%)`;
-                        nEl.className = `text-xs font-bold px-2 py-1 rounded ${n.change >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`;
+                    if(n.ltp > 0) {
+                        document.getElementById('nifty-spot').innerText = n.ltp;
+                        const nSign = n.change >= 0 ? '+' : '';
+                        const nElem = document.getElementById('nifty-chg');
+                        nElem.innerText = `${nSign}${n.change} (${nSign}${n.pchange}%)`;
+                        nElem.className = 'ticker-chg ' + (n.change >= 0 ? 'up-text' : 'down-text');
                     }
-                    if (s && s.ltp > 0) {
-                        document.getElementById('sensex-ltp').innerText = s.ltp.toFixed(2);
-                        const sEl = document.getElementById('sensex-change');
-                        sEl.innerText = `${s.change > 0 ? '+' : ''}${s.change} (${s.pchange}%)`;
-                        sEl.className = `text-xs font-bold px-2 py-1 rounded ${s.change >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`;
-                    }
-                }
-
-                // 5. PnL
-                const pnl = data.total_pnl || 0.0;
-                const pnlEl = document.getElementById('total-pnl');
-                pnlEl.innerText = `₹ ${pnl.toFixed(2)}`;
-                pnlEl.className = `text-xl font-bold mt-1 ${pnl >= 0 ? 'text-emerald-600' : 'text-rose-600'}`;
-                document.getElementById('pnl-badge').innerText = `${data.trades_executed_today || 0} Trades`;
-
-                // 6. MARKET MOVERS
-                if (data.market_movers) {
-                    const gList = document.getElementById('gainers-list');
-                    const lList = document.getElementById('losers-list');
-                    if (data.market_movers.gainers && data.market_movers.gainers.length > 0) {
-                        gList.innerHTML = data.market_movers.gainers.map(x => 
-                            `<li class="flex justify-between border-b border-slate-50 pb-1">
-                                <span class="font-medium text-slate-700">${x.symbol}</span>
-                                <span class="font-bold text-emerald-600">+${x.pchange}%</span>
-                            </li>`
-                        ).join('');
-                    }
-                    if (data.market_movers.losers && data.market_movers.losers.length > 0) {
-                        lList.innerHTML = data.market_movers.losers.map(x => 
-                            `<li class="flex justify-between border-b border-slate-50 pb-1">
-                                <span class="font-medium text-slate-700">${x.symbol}</span>
-                                <span class="font-bold text-rose-600">${x.pchange}%</span>
-                            </li>`
-                        ).join('');
+                    if(s.ltp > 0) {
+                        document.getElementById('sensex-spot').innerText = s.ltp;
+                        const sSign = s.change >= 0 ? '+' : '';
+                        const sElem = document.getElementById('sensex-chg');
+                        sElem.innerText = `${sSign}${s.change} (${sSign}${s.pchange}%)`;
+                        sElem.className = 'ticker-chg ' + (s.change >= 0 ? 'up-text' : 'down-text');
                     }
                 }
 
-                // 7. C1 TABLE
-                const c1Tbody = document.getElementById('c1-table-body');
-                document.getElementById('c1-badge').innerText = `${(data.c1_candidates || []).length} Found`;
-                if (data.c1_candidates && data.c1_candidates.length > 0) {
-                    c1Tbody.innerHTML = data.c1_candidates.map(c => `
-                        <tr class="hover:bg-slate-50 transition">
-                            <td class="px-5 py-2.5 font-bold text-slate-900">${c.symbol.replace('-EQ', '')}</td>
-                            <td class="px-5 py-2.5"><span class="px-2 py-0.5 rounded text-[11px] font-bold ${c.bias.includes('BULLISH') ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}">${c.bias}</span></td>
-                            <td class="px-5 py-2.5 text-slate-700">${c.c1_high}</td>
-                            <td class="px-5 py-2.5 text-slate-700">${c.c1_low}</td>
-                            <td class="px-5 py-2.5 text-slate-700 font-semibold">${c.c1_close}</td>
-                            <td class="px-5 py-2.5 text-slate-500">${c.bias.includes('BULLISH') ? 'PDH: ' + c.pdh : 'PDL: ' + c.pdl}</td>
-                            <td class="px-5 py-2.5 font-bold text-blue-600">${c.ratio}x Vol</td>
-                        </tr>
-                    `).join('');
+                // P&L
+                const pnlElem = document.getElementById('pnl-display');
+                pnlElem.innerText = (data.total_pnl >= 0 ? '+₹' : '-₹') + Math.abs(data.total_pnl);
+                pnlElem.style.color = data.total_pnl >= 0 ? 'var(--up)' : 'var(--down)';
+
+                renderStats();
+
+                // Open Trades
+                if(data.active_trades && data.active_trades.length > 0) {
+                    let html = '';
+                    data.active_trades.forEach(t => {
+                        const tag = t.side === 'BUY' ? 'tag-buy' : 'tag-sell';
+                        const pnlColor = t.pnl >= 0 ? 'var(--up)' : 'var(--down)';
+                        html += `<tr>
+                            <td><b>${t.symbol}</b></td>
+                            <td><span class="${tag}">${t.side}</span></td>
+                            <td>${t.entry}</td>
+                            <td>${t.sl}</td>
+                            <td>${t.remaining_qty}</td>
+                            <td style="color:${pnlColor}; font-weight:bold;">${t.pnl}</td>
+                            <td><b>${t.status}</b></td>
+                        </tr>`;
+                    });
+                    document.getElementById('active-body').innerHTML = html;
                 }
 
-                // 8. ACTIVE TRADES TABLE
-                const actTbody = document.getElementById('active-trades-body');
-                document.getElementById('active-trades-badge').innerText = `${(data.active_trades || []).length} Open`;
-                if (data.active_trades && data.active_trades.length > 0) {
-                    actTbody.innerHTML = data.active_trades.map(t => `
-                        <tr class="hover:bg-slate-50 transition">
-                            <td class="px-4 py-2.5 font-bold text-slate-900">${t.symbol.replace('-EQ', '')}</td>
-                            <td class="px-4 py-2.5 font-bold ${t.side === 'BUY' ? 'text-emerald-600' : 'text-rose-600'}">${t.side}</td>
-                            <td class="px-4 py-2.5 text-slate-700">${t.remaining_qty}</td>
-                            <td class="px-4 py-2.5 text-slate-700">${t.entry}</td>
-                            <td class="px-4 py-2.5 font-semibold text-rose-500">${t.sl}</td>
-                            <td class="px-4 py-2.5 font-semibold text-emerald-600">${t.target}</td>
-                            <td class="px-4 py-2.5 font-bold text-slate-900">${t.ltp || t.entry}</td>
-                            <td class="px-4 py-2.5 font-bold ${t.pnl >= 0 ? 'text-emerald-600' : 'text-rose-600'}">₹ ${t.pnl.toFixed(2)}</td>
-                            <td class="px-4 py-2.5"><span class="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-50 text-blue-600">${t.status}</span></td>
-                        </tr>
-                    `).join('');
+                // History
+                if(data.trade_history && data.trade_history.length > 0) {
+                    let histHtml = '';
+                    data.trade_history.forEach(h => {
+                        const resColor = h.pnl >= 0 ? 'var(--up)' : 'var(--down)';
+                        histHtml += `<tr>
+                            <td><small style="color:var(--text-muted)">${h.time}</small></td>
+                            <td><b>${h.symbol}</b></td>
+                            <td>${h.side}</td>
+                            <td>${h.entry} → ${h.exit}</td>
+                            <td style="color:${resColor}; font-weight:bold;">${h.pnl}</td>
+                            <td><b>${h.status}</b></td>
+                        </tr>`;
+                    });
+                    document.getElementById('history-body').innerHTML = histHtml;
                 }
-
-                // 9. HISTORY TABLE
-                const histTbody = document.getElementById('history-body');
-                if (data.trade_history && data.trade_history.length > 0) {
-                    histTbody.innerHTML = data.trade_history.map(h => `
-                        <tr>
-                            <td class="px-4 py-2 text-slate-500">${h.time}</td>
-                            <td class="px-4 py-2 font-bold text-slate-900">${h.symbol.replace('-EQ', '')}</td>
-                            <td class="px-4 py-2 font-bold ${h.side === 'BUY' ? 'text-emerald-600' : 'text-rose-600'}">${h.side}</td>
-                            <td class="px-4 py-2">${h.entry}</td>
-                            <td class="px-4 py-2">${h.exit}</td>
-                            <td class="px-4 py-2 font-bold ${h.pnl >= 0 ? 'text-emerald-600' : 'text-rose-600'}">₹ ${h.pnl.toFixed(2)}</td>
-                            <td class="px-4 py-2 text-slate-500">${h.status}</td>
-                        </tr>
-                    `).join('');
-                }
-
-            } catch (e) {
-                console.log("Polling state error:", e);
-            }
+            } catch(e) {}
         }
 
-        // Initialize polling every 2 seconds
-        setInterval(fetchState, 2000);
-        fetchState();
+        setInterval(refresh, 2500);
+        refresh();
     </script>
 </body>
 </html>
