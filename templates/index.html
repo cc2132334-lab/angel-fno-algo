@@ -36,8 +36,22 @@
         input, select, button { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text-main); margin-top: 6px; font-size: 0.9rem; }
         button { font-weight: bold; border: none; cursor: pointer; }
         
-        .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-        .theme-btn { background: var(--card-bg); border: 1px solid var(--border); padding: 6px 12px; border-radius: 20px; font-size: 0.8rem; cursor: pointer; width: auto; margin: 0; }
+        .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .theme-btn { background: var(--card-bg); border: 1px solid var(--border); padding: 5px 10px; border-radius: 20px; font-size: 0.75rem; cursor: pointer; width: auto; margin: 0; }
+
+        /* Realtime Market Clock Bar */
+        .clock-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
+        .clock-time { font-size: 0.85rem; font-weight: 700; font-family: monospace; letter-spacing: 0.5px; }
+        .mkt-status { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; font-weight: 800; }
+        .status-dot { width: 9px; height: 9px; border-radius: 50%; }
+        .dot-green { background: #22c55e; box-shadow: 0 0 8px #22c55e; animation: pulse 1.5s infinite; }
+        .dot-red { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
+
+        @keyframes pulse {
+            0% { transform: scale(0.95); opacity: 0.8; }
+            50% { transform: scale(1.15); opacity: 1; }
+            100% { transform: scale(0.95); opacity: 0.8; }
+        }
         
         .ticker-bar { display: flex; gap: 8px; margin-bottom: 12px; }
         .ticker-box { flex: 1; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; text-align: center; }
@@ -63,13 +77,25 @@
         .tag-buy { color: var(--up); background: rgba(34, 197, 94, 0.15); padding: 2px 6px; border-radius: 4px; font-weight: bold; }
         .tag-sell { color: var(--down); background: rgba(239, 68, 68, 0.15); padding: 2px 6px; border-radius: 4px; font-weight: bold; }
         .highlight-vol { background: rgba(56, 189, 248, 0.2); color: var(--accent); padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+        
+        .log-box { background: rgba(15, 23, 42, 0.04); border: 1px solid var(--border); border-radius: 8px; padding: 10px; max-height: 250px; overflow-y: auto; font-family: monospace; font-size: 0.75rem; line-height: 1.5; }
+        [data-theme="dark"] .log-box { background: rgba(0, 0, 0, 0.3); }
+        .log-entry { margin-bottom: 4px; border-bottom: 1px dashed rgba(148, 163, 184, 0.15); padding-bottom: 2px; }
     </style>
 </head>
 <body data-theme="light">
 
     <div class="header-bar">
-        <h1 style="font-size: 1.1rem; font-weight: 800;">⚡ ALGO PRO TERMINAL</h1>
+        <h1 style="font-size: 1.05rem; font-weight: 800;">⚡ ALGO PRO TERMINAL</h1>
         <button class="theme-btn" onclick="toggleTheme()" id="theme-btn">🌙 Dark Mode</button>
+    </div>
+
+    <div class="clock-card">
+        <div class="mkt-status">
+            <span class="status-dot dot-red" id="mkt-dot"></span>
+            <span id="mkt-text" style="color: #ef4444;">MARKET CLOSED</span>
+        </div>
+        <div class="clock-time" id="live-clock">--:--:-- --</div>
     </div>
 
     <div class="card" id="login-card" style="border: 2px solid var(--accent); padding: 18px;">
@@ -212,6 +238,7 @@
             <div class="tabs">
                 <button class="tab-btn active" onclick="switchTradesTab('active', this)">⚡ Active Positions</button>
                 <button class="tab-btn" onclick="switchTradesTab('history', this)">📜 Trade History</button>
+                <button class="tab-btn" onclick="switchTradesTab('logs', this)">📝 Activity Logs</button>
             </div>
 
             <div id="active-view">
@@ -227,6 +254,12 @@
                     <tbody id="history-body"><tr><td colspan="6" style="text-align:center; color: var(--text-muted);">No closed trades yet</td></tr></tbody>
                 </table>
             </div>
+
+            <div id="logs-view" style="display: none;">
+                <div class="log-box" id="logs-container">
+                    <div style="color: var(--text-muted); text-align: center;">Waiting for logs...</div>
+                </div>
+            </div>
         </div>
 
     </div>
@@ -237,6 +270,42 @@
         let cachedState = null;
 
         document.getElementById('scan-date').value = new Date().toISOString().split('T')[0];
+
+        // Real-time IST Clock & Market Live/Closed Indicator
+        function updateLiveClock() {
+            const now = new Date();
+            const istOptions = { timeZone: "Asia/Kolkata", hour12: true, hour: "2-digit", minute: "2-digit", second: "2-digit" };
+            const dateOptions = { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "numeric" };
+            
+            const timeStr = now.toLocaleTimeString("en-US", istOptions);
+            const dateStr = now.toLocaleDateString("en-GB", dateOptions);
+
+            document.getElementById('live-clock').innerText = `${dateStr} | ${timeStr}`;
+
+            // Check Indian Market Hours (Mon-Fri 09:15 AM to 03:30 PM)
+            const day = now.getDay(); // 0 = Sun, 6 = Sat
+            const istHours = parseInt(now.toLocaleTimeString("en-US", { timeZone: "Asia/Kolkata", hour12: false, hour: "2-digit" }));
+            const istMinutes = parseInt(now.toLocaleTimeString("en-US", { timeZone: "Asia/Kolkata", hour12: false, minute: "2-digit" }));
+            const totalMinutes = (istHours * 60) + istMinutes;
+
+            const isWeekday = (day >= 1 && day <= 5);
+            const isMarketOpen = isWeekday && (totalMinutes >= 555 && totalMinutes <= 930); // 9:15 AM (555) to 3:30 PM (930)
+
+            const dot = document.getElementById('mkt-dot');
+            const text = document.getElementById('mkt-text');
+
+            if (isMarketOpen) {
+                dot.className = "status-dot dot-green";
+                text.innerText = "MARKET LIVE";
+                text.style.color = "#16a34a";
+            } else {
+                dot.className = "status-dot dot-red";
+                text.innerText = "MARKET CLOSED";
+                text.style.color = "#ef4444";
+            }
+        }
+        setInterval(updateLiveClock, 1000);
+        updateLiveClock();
 
         function toggleTheme() {
             const body = document.body;
@@ -399,13 +468,13 @@
                 if(b.parentNode === btn.parentNode) b.classList.remove('active');
             });
             btn.classList.add('active');
-            if(tab === 'active') {
-                document.getElementById('active-view').style.display = 'block';
-                document.getElementById('history-view').style.display = 'none';
-            } else {
-                document.getElementById('active-view').style.display = 'none';
-                document.getElementById('history-view').style.display = 'block';
-            }
+            document.getElementById('active-view').style.display = 'none';
+            document.getElementById('history-view').style.display = 'none';
+            document.getElementById('logs-view').style.display = 'none';
+
+            if(tab === 'active') document.getElementById('active-view').style.display = 'block';
+            else if(tab === 'history') document.getElementById('history-view').style.display = 'block';
+            else if(tab === 'logs') document.getElementById('logs-view').style.display = 'block';
         }
 
         function renderStats() {
@@ -509,6 +578,16 @@
                     });
                     document.getElementById('history-body').innerHTML = histHtml;
                 }
+
+                // Activity Logs Tab
+                if(data.system_logs && data.system_logs.length > 0) {
+                    let logsHtml = '';
+                    data.system_logs.slice().reverse().forEach(l => {
+                        logsHtml += `<div class="log-entry">${l}</div>`;
+                    });
+                    document.getElementById('logs-container').innerHTML = logsHtml;
+                }
+
             } catch(e) {}
         }
 
