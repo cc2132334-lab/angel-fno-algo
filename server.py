@@ -33,7 +33,7 @@ def load_saved_config():
                 saved = json.load(f)
                 return {**default_config, **saved}
         except Exception as e:
-            print(f"Error loading config file: {e}")
+            print(f"Error loading config: {e}")
     return default_config
 
 def save_config():
@@ -48,7 +48,6 @@ def save_config():
         }
         with open(CONFIG_FILE, "w") as f:
             json.dump(data, f, indent=4)
-        print("Config saved successfully:", data)
     except Exception as e:
         print(f"Config save error: {e}")
 
@@ -124,7 +123,7 @@ def fetch_candles(token, interval="FIVE_MINUTE", days=2):
 
 def fetch_daily_pdh_pdl(token):
     now = get_ist_now()
-    from_date = (now - datetime.timedelta(days=7)).strftime("%Y-%m-%d 09:15")
+    from_date = (now - datetime.timedelta(days=10)).strftime("%Y-%m-%d 09:15")
     to_date = (now - datetime.timedelta(days=1)).strftime("%Y-%m-%d 15:30")
     params = {
         "exchange": "NSE",
@@ -139,14 +138,15 @@ def fetch_daily_pdh_pdl(token):
             df = pd.DataFrame(data["data"], columns=["time", "open", "high", "low", "close", "volume"])
             if not df.empty:
                 last_day = df.iloc[-1]
-                return float(last_day["high"]), float(last_day["low"]), float(last_day["close"])
+                avg_5d_vol = df["volume"].tail(5).mean() if len(df) >= 2 else float(last_day["volume"])
+                return float(last_day["high"]), float(last_day["low"]), float(last_day["close"]), float(last_day["volume"]), float(avg_5d_vol)
     except Exception:
         pass
-    return None, None, None
+    return None, None, None, 0, 0
 
 def load_fno_universe():
     try:
-        log("Downloading Angel One Master & extracting complete active F&O Cash stocks...")
+        log("Downloading Angel One Master & filtering real F&O Cash stocks...")
         url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
         res = requests.get(url, timeout=25)
         master = res.json()
@@ -155,7 +155,7 @@ def load_fno_universe():
         for s in master:
             if s.get('exch_seg') == 'NFO' and s.get('instrumenttype') == 'FUTSTK':
                 base_name = s.get('name', '').strip()
-                if base_name:
+                if base_name and "TEST" not in base_name.upper():
                     fno_symbols.add(base_name.upper())
 
         matched_stocks = []
@@ -164,6 +164,9 @@ def load_fno_universe():
                 sym = str(s.get('symbol', ''))
                 if sym.endswith('-EQ'):
                     clean_name = sym.replace('-EQ', '').strip().upper()
+                    # Block all exchange test symbols permanently
+                    if "TEST" in clean_name or "NSETEST" in clean_name:
+                        continue
                     token = str(s.get('token'))
                     if clean_name in fno_symbols:
                         matched_stocks.append({
@@ -172,23 +175,25 @@ def load_fno_universe():
                             "token": token
                         })
 
-        log(f"Detected {len(matched_stocks)} verified F&O Cash stocks. Loading PDH & PDL...")
+        log(f"Detected {len(matched_stocks)} valid F&O Cash stocks. Loading PDH & PDL...")
 
         final_list = []
         for item in matched_stocks:
-            time.sleep(0.03)
-            pdh, pdl, prev_close = fetch_daily_pdh_pdl(item["token"])
+            time.sleep(0.02)
+            pdh, pdl, prev_close, last_vol, avg_vol = fetch_daily_pdh_pdl(item["token"])
             final_list.append({
                 "symbol": item["symbol"],
                 "token": item["token"],
                 "name": item["name"],
                 "pdh": pdh or 0.0,
                 "pdl": pdl or 0.0,
-                "prev_close": prev_close or 0.0
+                "prev_close": prev_close or 0.0,
+                "last_daily_vol": last_vol or 0,
+                "avg_5d_vol": avg_vol or 1
             })
 
         bot_state["fno_stocks"] = final_list
-        log(f"SUCCESS: All {len(bot_state['fno_stocks'])} F&O stocks loaded. No stock left behind.")
+        log(f"SUCCESS: {len(bot_state['fno_stocks'])} active F&O stocks loaded. Calculating Movers & Buzzers...")
         calculate_market_movers()
     except Exception as e:
         log(f"Universe sync error: {e}")
@@ -209,7 +214,7 @@ def api_login():
             bot_state["smart_api"] = smart_api
             bot_state["feed_token"] = smart_api.getfeedToken()
             bot_state["is_logged_in"] = True
-            log("Broker Connected! 5x Volume strategy engine armed.")
+            log("Broker Connected! 5x Volume strategy armed.")
 
             threading.Thread(target=load_fno_universe, daemon=True).start()
             threading.Thread(target=background_scanner, daemon=True).start()
@@ -234,15 +239,7 @@ def update_settings():
         bot_state["risk_amount"] = int(data["risk_amount"])
     save_config()
     log(f"Settings Saved: Trades={bot_state['max_trades']}, RR=1:{bot_state['rr_ratio']}, Risk=₹{bot_state['risk_amount']}, Cutoff={bot_state['cutoff_time']}")
-    return jsonify({
-        "status": "success",
-        "settings": {
-            "max_trades": bot_state["max_trades"],
-            "rr_ratio": bot_state["rr_ratio"],
-            "cutoff_time": bot_state["cutoff_time"],
-            "risk_amount": bot_state["risk_amount"]
-        }
-    })
+    return jsonify({"status": "success"})
 
 @app.route('/api/toggle-engine', methods=['POST'])
 def toggle_engine():
@@ -519,11 +516,16 @@ def background_scanner():
 
         time.sleep(1)
 
+# =========================================================================
+# ACCURATE VOLUME BUZZERS & MARKET MOVERS (REAL VALUES & MULTIPLIERS)
+# =========================================================================
 def calculate_market_movers():
     if not bot_state["is_logged_in"] or not bot_state["fno_stocks"]:
         return
 
     stock_perf = []
+    buzzers = []
+
     for s in bot_state["fno_stocks"]:
         try:
             res = bot_state["smart_api"].ltpData("NSE", s["symbol"], str(s["token"]))
@@ -531,25 +533,42 @@ def calculate_market_movers():
                 d = res["data"]
                 ltp = float(d.get("ltp") or 0.0)
                 close = float(d.get("close") or s.get("prev_close") or ltp)
-                vol = int(d.get("trade_volume") or d.get("volume") or 0)
+                
+                # Use live volume during trading hours, fallback to last closed day volume after hours
+                live_vol = int(d.get("trade_volume") or d.get("volume") or 0)
+                effective_vol = live_vol if live_vol > 0 else int(s.get("last_daily_vol") or 0)
+                avg_vol = float(s.get("avg_5d_vol") or 1.0)
+                
+                vol_burst = round(effective_vol / avg_vol, 2) if avg_vol > 0 else 1.0
 
                 if ltp > 0:
                     pchange = round(((ltp - close) / close) * 100, 2) if close > 0 else 0.0
-                    stock_perf.append({
-                        "symbol": s["symbol"].replace("-EQ", ""),
+                    clean_sym = s["symbol"].replace("-EQ", "")
+                    
+                    item_data = {
+                        "symbol": clean_sym,
                         "ltp": ltp,
                         "pchange": pchange,
-                        "volume": vol
-                    })
+                        "volume": effective_vol,
+                        "burst": vol_burst
+                    }
+                    stock_perf.append(item_data)
+                    
+                    # Strictly only real volume stocks qualify for buzzers
+                    if effective_vol > 0:
+                        buzzers.append(item_data)
         except Exception:
             pass
         time.sleep(0.015)
 
     if len(stock_perf) >= 5:
         df_p = pd.DataFrame(stock_perf)
-        bot_state["market_stats"]["top_gainers"] = df_p.sort_values(by="pchange", ascending=False).head(8).to_dict('records')
-        bot_state["market_stats"]["top_losers"] = df_p.sort_values(by="pchange", ascending=True).head(8).to_dict('records')
-        bot_state["market_stats"]["volume_buzzers"] = df_p.sort_values(by="volume", ascending=False).head(8).to_dict('records')
+        bot_state["market_stats"]["top_gainers"] = df_p.sort_values(by="pchange", ascending=False).head(10).to_dict('records')
+        bot_state["market_stats"]["top_losers"] = df_p.sort_values(by="pchange", ascending=True).head(10).to_dict('records')
+        
+        if buzzers:
+            df_b = pd.DataFrame(buzzers)
+            bot_state["market_stats"]["volume_buzzers"] = df_b.sort_values(by="burst", ascending=False).head(10).to_dict('records')
 
 def market_data_monitor():
     last_stats_check = 0
@@ -625,12 +644,12 @@ def market_data_monitor():
                             trade["sl"] = trade["entry"]
                             log(f"1:2 Hit on {trade['symbol']}! Booked 50%. SL trailed to Cost.")
 
-                        if ltp <= trade["sl"]:
+                        if ltp >= trade["sl"]:
                             trade["status"] = "SL / TRAIL HIT"
                             if trade["mode"] == "LIVE":
                                 place_live_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
                             record_trade_history(trade, ltp)
-                        elif ltp >= trade["target"]:
+                        elif ltp <= trade["target"]:
                             trade["status"] = "FULL TARGET HIT"
                             if trade["mode"] == "LIVE":
                                 place_live_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
