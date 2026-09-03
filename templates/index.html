@@ -154,7 +154,7 @@
                     <select id="max-trades" onchange="syncSettings()">
                         <option value="1">1 Trade</option>
                         <option value="2">2 Trades</option>
-                        <option value="3">3 Trades</option>
+                        <option value="3" selected>3 Trades</option>
                         <option value="5">5 Trades</option>
                         <option value="10">10 Trades</option>
                     </select>
@@ -169,7 +169,7 @@
                         <option value="12:00">Till 12:00 PM</option>
                         <option value="13:00">Till 01:00 PM</option>
                         <option value="14:00">Till 02:00 PM</option>
-                        <option value="15:00">Till 03:00 PM</option>
+                        <option value="15:00" selected>Till 03:00 PM</option>
                         <option value="15:30">Till 03:30 PM (Close)</option>
                     </select>
                 </div>
@@ -280,7 +280,6 @@
 
         document.getElementById('scan-date').value = new Date().toISOString().split('T')[0];
 
-        // Restore Settings from LocalStorage immediately on load
         function restoreLocalSettings() {
             try {
                 const saved = JSON.parse(localStorage.getItem('bot_settings') || '{}');
@@ -333,10 +332,7 @@
                 rr_ratio: document.getElementById('rr-slider').value,
                 risk_amount: document.getElementById('risk-slider').value
             };
-            // Save in Browser Storage
             localStorage.setItem('bot_settings', JSON.stringify(payload));
-            
-            // Save in Backend Server
             await fetch('/api/update-settings', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -411,7 +407,6 @@
             if(data.status === 'success') {
                 document.getElementById('login-card').style.display = 'none';
                 document.getElementById('main-terminal').style.display = 'block';
-                // Sync current settings once after login
                 syncSettings();
                 refresh();
             } else {
@@ -512,7 +507,14 @@
             list.forEach(item => {
                 const cls = item.pchange >= 0 ? 'up-text' : 'down-text';
                 const sign = item.pchange >= 0 ? '+' : '';
-                const extra = isVol ? `<br><small style="color:var(--text-muted)">Vol: ${item.volume.toLocaleString()}</small>` : '';
+                
+                // Real Volume Burst multiplier rendering (e.g. 9.15x / Vol: 1,200,000)
+                let extra = '';
+                if (isVol) {
+                    const burstTag = item.burst ? `<span class="highlight-vol">${item.burst}x</span>` : '';
+                    extra = `<br><small style="color:var(--text-muted)">Vol: ${item.volume.toLocaleString()} ${burstTag}</small>`;
+                }
+
                 html += `<tr><td><b>${item.symbol}</b>${extra}</td><td>₹${item.ltp}</td><td class="${cls}"><b>${sign}${item.pchange}%</b></td></tr>`;
             });
             document.getElementById('stats-body').innerHTML = html;
@@ -538,7 +540,6 @@
                     document.getElementById('main-terminal').style.display = 'block';
                 }
 
-                // Restore backend settings to UI on first poll if not yet restored
                 if(!settingsRestored && data) {
                     if(data.max_trades) document.getElementById('max-trades').value = data.max_trades;
                     if(data.cutoff_time) document.getElementById('cutoff-time').value = data.cutoff_time;
@@ -570,7 +571,6 @@
                 isEngineRunning = data.engine_running;
                 updateEngineButtonUI(data.engine_running);
 
-                // Tickers
                 if(data.market_indices) {
                     const n = data.market_indices.NIFTY;
                     const s = data.market_indices.SENSEX;
@@ -590,14 +590,12 @@
                     }
                 }
 
-                // P&L
                 const pnlElem = document.getElementById('pnl-display');
                 pnlElem.innerText = (data.total_pnl >= 0 ? '+₹' : '-₹') + Math.abs(data.total_pnl);
                 pnlElem.style.color = data.total_pnl >= 0 ? 'var(--up)' : 'var(--down)';
 
                 renderStats();
 
-                // Open Trades
                 if(data.active_trades && data.active_trades.length > 0) {
                     let html = '';
                     data.active_trades.forEach(t => {
@@ -616,7 +614,6 @@
                     document.getElementById('active-body').innerHTML = html;
                 }
 
-                // History
                 if(data.trade_history && data.trade_history.length > 0) {
                     let histHtml = '';
                     data.trade_history.forEach(h => {
