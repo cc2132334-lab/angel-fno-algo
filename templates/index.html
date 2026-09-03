@@ -465,15 +465,19 @@
         }
 
         function renderStats() {
-            if(!cachedState || !cachedState.market_stats) return;
+            if(!cachedState) return;
+            // Flexible resolution between stats and movers keys
+            const pool = cachedState.market_stats || cachedState.market_movers;
+            if(!pool) return;
+
             let list = [];
             let isVol = false;
-            if(currentStatsTab === 'gainers') list = cachedState.market_stats.top_gainers || [];
-            else if(currentStatsTab === 'losers') list = cachedState.market_stats.top_losers || [];
-            else if(currentStatsTab === 'volume') { list = cachedState.market_stats.volume_buzzers || []; isVol = true; }
+            if(currentStatsTab === 'gainers') list = pool.top_gainers || [];
+            else if(currentStatsTab === 'losers') list = pool.top_losers || [];
+            else if(currentStatsTab === 'volume') { list = pool.volume_buzzers || []; isVol = true; }
 
             if(list.length === 0) {
-                document.getElementById('stats-body').innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Fetching real market data from Angel One...</td></tr>`;
+                document.getElementById('stats-body').innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Loading real market data...</td></tr>`;
                 return;
             }
 
@@ -498,7 +502,6 @@
                     document.getElementById('main-terminal').style.display = 'block';
                 }
 
-                // Accurate Market Live / Closed Indicator
                 const dot = document.getElementById('mkt-dot');
                 const text = document.getElementById('mkt-text');
                 if(data.is_market_live) {
