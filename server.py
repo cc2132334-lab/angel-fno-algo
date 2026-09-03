@@ -53,6 +53,7 @@ def save_config():
 
 saved_conf = load_saved_config()
 
+# Global Bot State
 bot_state = {
     "is_logged_in": False,
     "engine_running": saved_conf["engine_running"],
@@ -87,9 +88,7 @@ def log(msg):
     print(bot_state["status_log"])
 
 def calculate_quantity(risk_amount, entry_price, sl_price):
-    """
-    FORMULA: Quantity = Risk Per Trade / SL Points
-    """
+    """FORMULA: Quantity = Risk Per Trade / SL Points"""
     try:
         sl_points = abs(entry_price - sl_price)
         if sl_points <= 0.05:
@@ -135,7 +134,7 @@ def index():
 
 @app.route('/api/login', methods=['POST'])
 def api_login():
-    data = request.json
+    data = request.json or {}
     try:
         smart_api = SmartConnect(api_key=data.get("api_key"))
         totp = pyotp.TOTP(data.get("totp_secret")).now()
@@ -160,7 +159,7 @@ def api_login():
 
 @app.route('/api/update-settings', methods=['POST'])
 def update_settings():
-    data = request.json
+    data = request.json or {}
     if "max_trades" in data:
         bot_state["max_trades"] = int(data["max_trades"])
     if "rr_ratio" in data:
@@ -175,7 +174,7 @@ def update_settings():
 
 @app.route('/api/toggle-engine', methods=['POST'])
 def toggle_engine():
-    data = request.json
+    data = request.json or {}
     bot_state["engine_running"] = data.get("running", True)
     save_config()
     status_str = "RUNNING" if bot_state["engine_running"] else "STOPPED"
@@ -184,7 +183,7 @@ def toggle_engine():
 
 @app.route('/api/set-mode', methods=['POST'])
 def set_mode():
-    data = request.json
+    data = request.json or {}
     mode = data.get("mode", "PAPER").upper()
     if mode in ["PAPER", "LIVE"]:
         bot_state["trading_mode"] = mode
@@ -195,29 +194,34 @@ def set_mode():
 
 @app.route('/api/manual-5x-scan', methods=['POST'])
 def manual_5x_scan():
-    """Selected Date ke hisab se FnO Cash pool me 5x Volume scan karna (User Analysis ke liye)"""
-    if not bot_state["is_logged_in"]:
+    """Direct object validation se session mismatch bug solve hota hai"""
+    if bot_state.get("smart_api") is None:
         return jsonify({"status": "error", "message": "Please connect broker first"})
 
-    data = request.json
+    data = request.get_json(force=True) or {}
     selected_date = data.get("date")
     if not selected_date:
         return jsonify({"status": "error", "message": "Please select a valid date"})
 
     try:
         target_dt = datetime.datetime.strptime(selected_date, "%Y-%m-%d")
-        from_dt = (target_dt - datetime.timedelta(days=5)).strftime("%Y-%m-%d 09:15")
+        from_dt = (target_dt - datetime.timedelta(days=7)).strftime("%Y-%m-%d 09:15")
         to_dt = target_dt.strftime("%Y-%m-%d 15:30")
     except Exception:
         return jsonify({"status": "error", "message": "Invalid date format"})
 
-    filtered_results = []
-    stocks_to_scan = bot_state["fno_stocks"] if bot_state["fno_stocks"] else []
-    if not stocks_to_scan:
-        return jsonify({"status": "error", "message": "No stocks available in F&O cache yet"})
+    if not bot_state["fno_stocks"]:
+        load_fno_symbols()
 
-    for item in stocks_to_scan[:60]:
-        time.sleep(0.25)
+    stocks_to_scan = bot_state["fno_stocks"]
+    if not stocks_to_scan:
+        return jsonify({"status": "error", "message": "F&O Stock pool is loading. Please try again in 5 seconds."})
+
+    filtered_results = []
+
+    # Fast scan batch
+    for item in stocks_to_scan[:50]:
+        time.sleep(0.2)
         params = {
             "exchange": "NSE",
             "symboltoken": str(item["token"]),
@@ -252,7 +256,12 @@ def manual_5x_scan():
         except Exception:
             continue
 
-    return jsonify({"status": "success", "date": selected_date, "count": len(filtered_results), "results": filtered_results})
+    return jsonify({
+        "status": "success",
+        "date": selected_date,
+        "count": len(filtered_results),
+        "results": filtered_results
+    })
 
 @app.route('/api/state', methods=['GET'])
 def get_state():
@@ -416,7 +425,6 @@ def background_scanner():
 
                     if side:
                         risk_pts = abs(trigger_price - sl)
-                        # Exact requested formula: Risk Per Trade / SL Points
                         qty = calculate_quantity(bot_state["risk_amount"], trigger_price, sl)
                         target_mult = bot_state["rr_ratio"]
                         final_target = round(trigger_price + (target_mult * risk_pts) if side == "BUY" else trigger_price - (target_mult * risk_pts), 2)
