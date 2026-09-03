@@ -154,7 +154,7 @@
                     <select id="max-trades" onchange="syncSettings()">
                         <option value="1">1 Trade</option>
                         <option value="2">2 Trades</option>
-                        <option value="3" selected>3 Trades</option>
+                        <option value="3">3 Trades</option>
                         <option value="5">5 Trades</option>
                         <option value="10">10 Trades</option>
                     </select>
@@ -169,7 +169,7 @@
                         <option value="12:00">Till 12:00 PM</option>
                         <option value="13:00">Till 01:00 PM</option>
                         <option value="14:00">Till 02:00 PM</option>
-                        <option value="15:00" selected>Till 03:00 PM</option>
+                        <option value="15:00">Till 03:00 PM</option>
                         <option value="15:30">Till 03:30 PM (Close)</option>
                     </select>
                 </div>
@@ -229,8 +229,8 @@
 
         <!-- MARKET MOVERS -->
         <div class="card">
-            <h2>📊 Market Movers</h2>
-            <div class="tabs">
+            <h2>📊 Market Movers (Watch Only)</h2>
+            <div class="tabs" id="movers-tabs">
                 <button class="tab-btn active" onclick="switchStatsTab('gainers', this)">🚀 Top Gainers</button>
                 <button class="tab-btn" onclick="switchStatsTab('losers', this)">🔻 Top Losers</button>
                 <button class="tab-btn" onclick="switchStatsTab('volume', this)">🔥 Volume Buzzers</button>
@@ -243,7 +243,7 @@
 
         <!-- ACTIVE POSITIONS, TRADE HISTORY & SYSTEM LOGS -->
         <div class="card">
-            <div class="tabs">
+            <div class="tabs" id="execution-tabs">
                 <button class="tab-btn active" onclick="switchTradesTab('active', this)">⚡ Active Positions</button>
                 <button class="tab-btn" onclick="switchTradesTab('history', this)">📜 Trade History</button>
                 <button class="tab-btn" onclick="switchTradesTab('logs', this)">📝 Activity Logs</button>
@@ -276,8 +276,27 @@
         let currentStatsTab = 'gainers';
         let isEngineRunning = true;
         let cachedState = null;
+        let settingsRestored = false;
 
         document.getElementById('scan-date').value = new Date().toISOString().split('T')[0];
+
+        // Restore Settings from LocalStorage immediately on load
+        function restoreLocalSettings() {
+            try {
+                const saved = JSON.parse(localStorage.getItem('bot_settings') || '{}');
+                if (saved.max_trades) document.getElementById('max-trades').value = saved.max_trades;
+                if (saved.cutoff_time) document.getElementById('cutoff-time').value = saved.cutoff_time;
+                if (saved.rr_ratio) {
+                    document.getElementById('rr-slider').value = saved.rr_ratio;
+                    updateRR(saved.rr_ratio);
+                }
+                if (saved.risk_amount) {
+                    document.getElementById('risk-slider').value = saved.risk_amount;
+                    updateRisk(saved.risk_amount);
+                }
+            } catch(e) {}
+        }
+        restoreLocalSettings();
 
         function updateLiveClock() {
             const now = new Date();
@@ -314,6 +333,10 @@
                 rr_ratio: document.getElementById('rr-slider').value,
                 risk_amount: document.getElementById('risk-slider').value
             };
+            // Save in Browser Storage
+            localStorage.setItem('bot_settings', JSON.stringify(payload));
+            
+            // Save in Backend Server
             await fetch('/api/update-settings', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -388,6 +411,8 @@
             if(data.status === 'success') {
                 document.getElementById('login-card').style.display = 'none';
                 document.getElementById('main-terminal').style.display = 'block';
+                // Sync current settings once after login
+                syncSettings();
                 refresh();
             } else {
                 alert("Login Error: " + data.message);
@@ -442,13 +467,13 @@
 
         function switchStatsTab(tab, btn) {
             currentStatsTab = tab;
-            document.querySelectorAll('.card:nth-of-type(4) .tabs button').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('#movers-tabs button').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             renderStats();
         }
 
         function switchTradesTab(tab, btn) {
-            document.querySelectorAll('.card:nth-of-type(5) .tabs button').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('#execution-tabs button').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
 
             const actV = document.getElementById('active-view');
@@ -511,6 +536,21 @@
                 if(data.logged_in || data.is_logged_in || data.broker_connected) {
                     document.getElementById('login-card').style.display = 'none';
                     document.getElementById('main-terminal').style.display = 'block';
+                }
+
+                // Restore backend settings to UI on first poll if not yet restored
+                if(!settingsRestored && data) {
+                    if(data.max_trades) document.getElementById('max-trades').value = data.max_trades;
+                    if(data.cutoff_time) document.getElementById('cutoff-time').value = data.cutoff_time;
+                    if(data.rr_ratio) {
+                        document.getElementById('rr-slider').value = data.rr_ratio;
+                        updateRR(data.rr_ratio);
+                    }
+                    if(data.risk_amount) {
+                        document.getElementById('risk-slider').value = data.risk_amount;
+                        updateRisk(data.risk_amount);
+                    }
+                    settingsRestored = true;
                 }
 
                 const dot = document.getElementById('mkt-dot');
@@ -593,7 +633,6 @@
                     document.getElementById('history-body').innerHTML = histHtml;
                 }
 
-                // Update Logs if view is open
                 if(document.getElementById('logs-view').style.display === 'block') {
                     renderLogs();
                 }
