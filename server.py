@@ -12,6 +12,7 @@ from SmartApi import SmartConnect
 
 app = Flask(__name__)
 
+# Indian Standard Time (IST)
 IST = tz.gettz('Asia/Kolkata')
 CONFIG_FILE = "bot_config.json"
 
@@ -77,13 +78,27 @@ bot_state = {
     "c1_candidates": [],
     "active_trades": [],
     "trade_history": [],
-    "status_log": f"Broker disconnected. Please login to continue."
+    "status_log": "Broker disconnected. Please login to continue."
 }
 
 def log(msg):
     timestamp = get_ist_now().strftime("%H:%M:%S")
     bot_state["status_log"] = f"[{timestamp} IST] {msg}"
     print(bot_state["status_log"])
+
+def calculate_quantity(risk_amount, entry_price, sl_price):
+    """
+    FORMULA: Quantity = Risk Per Trade / SL Points
+    """
+    try:
+        sl_points = abs(entry_price - sl_price)
+        if sl_points <= 0.05:
+            return 1
+        qty = int(risk_amount / sl_points)
+        return max(1, qty)
+    except Exception as e:
+        print(f"Error calculating quantity: {e}")
+        return 1
 
 def load_fno_symbols():
     try:
@@ -155,7 +170,7 @@ def update_settings():
     if "risk_amount" in data:
         bot_state["risk_amount"] = int(data["risk_amount"])
     save_config()
-    log(f"Settings saved: MaxTrades={bot_state['max_trades']}, Target=1:{bot_state['rr_ratio']}, Cutoff={bot_state['cutoff_time']}")
+    log(f"Settings saved: MaxTrades={bot_state['max_trades']}, Target=1:{bot_state['rr_ratio']}, Cutoff={bot_state['cutoff_time']}, Risk=₹{bot_state['risk_amount']}")
     return jsonify({"status": "success", "message": "Settings updated"})
 
 @app.route('/api/toggle-engine', methods=['POST'])
@@ -180,30 +195,28 @@ def set_mode():
 
 @app.route('/api/manual-5x-scan', methods=['POST'])
 def manual_5x_scan():
-    """Selected Date ke hisab se FnO Cash pool me 5x Volume scan karna (Sirf User ke liye)"""
+    """Selected Date ke hisab se FnO Cash pool me 5x Volume scan karna (User Analysis ke liye)"""
     if not bot_state["is_logged_in"]:
         return jsonify({"status": "error", "message": "Please connect broker first"})
 
     data = request.json
-    selected_date = data.get("date")  # Format: YYYY-MM-DD
+    selected_date = data.get("date")
     if not selected_date:
         return jsonify({"status": "error", "message": "Please select a valid date"})
 
     try:
-        # Date parse karein
         target_dt = datetime.datetime.strptime(selected_date, "%Y-%m-%d")
         from_dt = (target_dt - datetime.timedelta(days=5)).strftime("%Y-%m-%d 09:15")
         to_dt = target_dt.strftime("%Y-%m-%d 15:30")
-    except Exception as e:
+    except Exception:
         return jsonify({"status": "error", "message": "Invalid date format"})
 
     filtered_results = []
-    # Test/Scan pool F&O stocks
     stocks_to_scan = bot_state["fno_stocks"] if bot_state["fno_stocks"] else []
     if not stocks_to_scan:
         return jsonify({"status": "error", "message": "No stocks available in F&O cache yet"})
 
-    for item in stocks_to_scan[:60]:  # Timeout se bachne ke liye fast scan batch
+    for item in stocks_to_scan[:60]:
         time.sleep(0.25)
         params = {
             "exchange": "NSE",
@@ -218,7 +231,6 @@ def manual_5x_scan():
                 df = pd.DataFrame(res["data"], columns=["time", "open", "high", "low", "close", "volume"])
                 df['date_str'] = df['time'].apply(lambda x: str(x).split('T')[0] if 'T' in str(x) else str(x).split(' ')[0])
                 
-                # Check selected date ka 09:15 candle (C1)
                 day_df = df[df['date_str'] == selected_date]
                 if not day_df.empty and len(day_df) >= 1:
                     c1_idx = day_df.index[0]
@@ -261,10 +273,6 @@ def get_state():
         "trade_history": bot_state["trade_history"]
     })
 
-def calculate_quantity(risk, entry, sl):
-    risk_per_share = abs(entry - sl)
-    return 1 if risk_per_share <= 0 else max(1, int(risk / risk_per_share))
-
 def fetch_candles(token, interval="FIVE_MINUTE", days=2):
     now = get_ist_now()
     from_date = (now - datetime.timedelta(days=days)).strftime("%Y-%m-%d 09:15")
@@ -283,6 +291,26 @@ def fetch_candles(token, interval="FIVE_MINUTE", days=2):
     except Exception:
         pass
     return None
+
+def place_live_order(symbol, token, side, qty):
+    try:
+        order_params = {
+            "variety": "NORMAL",
+            "tradingsymbol": symbol,
+            "symboltoken": str(token),
+            "transactiontype": side,
+            "exchange": "NSE",
+            "ordertype": "MARKET",
+            "producttype": "INTRADAY",
+            "duration": "DAY",
+            "quantity": str(qty)
+        }
+        res = bot_state["smart_api"].placeOrder(order_params)
+        log(f"LIVE ORDER SENT: {side} {qty} {symbol} | Response: {res}")
+        return res
+    except Exception as e:
+        log(f"LIVE ORDER ERROR: {e}")
+        return None
 
 def background_scanner():
     c1_scanned = False
@@ -388,10 +416,18 @@ def background_scanner():
 
                     if side:
                         risk_pts = abs(trigger_price - sl)
+                        # Exact requested formula: Risk Per Trade / SL Points
                         qty = calculate_quantity(bot_state["risk_amount"], trigger_price, sl)
                         target_mult = bot_state["rr_ratio"]
                         final_target = round(trigger_price + (target_mult * risk_pts) if side == "BUY" else trigger_price - (target_mult * risk_pts), 2)
                         
+                        mode = bot_state["trading_mode"]
+                        status = "OPEN"
+                        if mode == "LIVE":
+                            res = place_live_order(cand["symbol"], cand["token"], side, qty)
+                            if not res:
+                                status = "FAILED"
+
                         bot_state["active_trades"].append({
                             "id": len(bot_state["active_trades"]) + 1,
                             "symbol": cand["symbol"],
@@ -408,12 +444,12 @@ def background_scanner():
                             "half_booked": False,
                             "ltp": trigger_price,
                             "pnl": 0.0,
-                            "status": "OPEN",
-                            "mode": bot_state["trading_mode"],
+                            "status": status,
+                            "mode": mode,
                             "time": get_ist_now().strftime("%H:%M:%S")
                         })
                         bot_state["trades_executed_today"] += 1
-                        log(f"Trade Entered: {side} {cand['symbol']} Qty:{qty} SL:{sl} Target:{final_target}")
+                        log(f"Trade Entered [{mode}]: {side} {cand['symbol']} Qty:{qty} SL:{sl} Target:{final_target}")
 
             c2_scanned = True
 
@@ -457,13 +493,17 @@ def market_data_monitor():
                             trade["remaining_qty"] -= half_qty
                             trade["half_booked"] = True
                             trade["sl"] = trade["entry"]
-                            log(f"1:2 Hit for {trade['symbol']}! Booked 50% qty. SL trailed to entry.")
+                            log(f"1:2 Milestone Hit for {trade['symbol']}! Booked 50% qty. SL trailed to entry (Cost).")
 
                         if ltp <= trade["sl"]:
                             trade["status"] = "SL / TRAIL HIT"
+                            if trade["mode"] == "LIVE":
+                                place_live_order(trade["symbol"], trade["token"], "SELL", trade["remaining_qty"])
                             record_trade_history(trade, ltp)
                         elif ltp >= trade["target"]:
                             trade["status"] = "FULL TARGET HIT"
+                            if trade["mode"] == "LIVE":
+                                place_live_order(trade["symbol"], trade["token"], "SELL", trade["remaining_qty"])
                             record_trade_history(trade, ltp)
 
                     else:
@@ -473,13 +513,17 @@ def market_data_monitor():
                             trade["remaining_qty"] -= half_qty
                             trade["half_booked"] = True
                             trade["sl"] = trade["entry"]
-                            log(f"1:2 Hit for {trade['symbol']}! Booked 50% qty. SL trailed to entry.")
+                            log(f"1:2 Milestone Hit for {trade['symbol']}! Booked 50% qty. SL trailed to entry (Cost).")
 
                         if ltp >= trade["sl"]:
                             trade["status"] = "SL / TRAIL HIT"
+                            if trade["mode"] == "LIVE":
+                                place_live_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
                             record_trade_history(trade, ltp)
                         elif ltp <= trade["target"]:
                             trade["status"] = "FULL TARGET HIT"
+                            if trade["mode"] == "LIVE":
+                                place_live_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
                             record_trade_history(trade, ltp)
             except Exception:
                 pass
