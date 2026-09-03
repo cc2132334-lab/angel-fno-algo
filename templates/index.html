@@ -72,7 +72,6 @@
         <button class="theme-btn" onclick="toggleTheme()" id="theme-btn">🌙 Dark Mode</button>
     </div>
 
-    <!-- 1. LOGIN CARD (FIRST SCREEN) -->
     <div class="card" id="login-card" style="border: 2px solid var(--accent); padding: 18px;">
         <h2 style="font-size: 1.05rem; margin-bottom: 8px; text-align: center;">🔐 Connect Angel One Broker</h2>
         <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px; text-align: center;">Terminal access karne ke liye broker connect karein.</p>
@@ -83,26 +82,23 @@
         <button id="login-btn" style="background: var(--accent); color: white; margin-top: 12px; padding: 11px;" onclick="login()">Connect Broker & Unlock Terminal</button>
     </div>
 
-    <!-- 2. MAIN TERMINAL (UNLOCKS AFTER LOGIN) -->
     <div id="main-terminal" style="display: none;">
         
-        <!-- Live NIFTY / SENSEX -->
         <div class="ticker-bar">
             <div class="ticker-box">
                 <div class="ticker-name">NIFTY 50</div>
                 <div class="ticker-val" id="nifty-spot">--</div>
-                <div class="ticker-chg" id="nifty-chg">0.00 (0.00%)</div>
+                <div class="ticker-chg" id="nifty-chg">--</div>
             </div>
             <div class="ticker-box">
                 <div class="ticker-name">SENSEX</div>
                 <div class="ticker-val" id="sensex-spot">--</div>
-                <div class="ticker-chg" id="sensex-chg">0.00 (0.00%)</div>
+                <div class="ticker-chg" id="sensex-chg">--</div>
             </div>
         </div>
 
-        <div class="status-box" id="system-status">Terminal Active.</div>
+        <div class="status-box" id="system-status">Connecting...</div>
 
-        <!-- Engine Control & Net P&L -->
         <div class="card" style="border-left: 4px solid #f59e0b;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                 <div>
@@ -118,7 +114,6 @@
             <button id="btn-engine" onclick="toggleEngine()" style="background: #16a34a; color: white;">🟢 ENGINE RUNNING (Click to Pause)</button>
         </div>
 
-        <!-- BOT CONTROLS -->
         <div class="card">
             <h2>⚙️ Bot Configuration & Limits</h2>
             
@@ -166,7 +161,6 @@
             </div>
         </div>
 
-        <!-- MANUAL SCANNER -->
         <div class="card">
             <h2>🔍 Manual 5x Volume Scanner (F&O Cash Only)</h2>
             <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 8px;">Date select karke 9:15-9:20 AM C1 candle ka 5x Volume breakout scan karein.</p>
@@ -201,7 +195,6 @@
             </div>
         </div>
 
-        <!-- MARKET MOVERS (GAINERS, LOSERS, VOLUME BUZZERS) -->
         <div class="card">
             <h2>📊 Market Movers</h2>
             <div class="tabs">
@@ -211,11 +204,10 @@
             </div>
             <table>
                 <thead><tr><th>Symbol</th><th>LTP</th><th>% Change</th></tr></thead>
-                <tbody id="stats-body"><tr><td colspan="3" style="text-align:center; color: var(--text-muted);">Loading live market stats...</td></tr></tbody>
+                <tbody id="stats-body"><tr><td colspan="3" style="text-align:center; color: var(--text-muted);">Fetching Real Market Data from Angel One...</td></tr></tbody>
             </table>
         </div>
 
-        <!-- ACTIVE POSITIONS & TRADE HISTORY -->
         <div class="card">
             <div class="tabs">
                 <button class="tab-btn active" onclick="switchTradesTab('active', this)">⚡ Active Positions</button>
@@ -425,7 +417,7 @@
             else if(currentStatsTab === 'volume') { list = cachedState.market_stats.volume_buzzers || []; isVol = true; }
 
             if(list.length === 0) {
-                document.getElementById('stats-body').innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Fetching market data...</td></tr>`;
+                document.getElementById('stats-body').innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Fetching Real Market Data from Angel One...</td></tr>`;
                 return;
             }
 
@@ -445,7 +437,6 @@
                 const data = await res.json();
                 cachedState = data;
 
-                // Sync Login State properly
                 if(data.logged_in || data.is_logged_in || data.broker_connected) {
                     document.getElementById('login-card').style.display = 'none';
                     document.getElementById('main-terminal').style.display = 'block';
@@ -456,18 +447,18 @@
                 isEngineRunning = data.engine_running;
                 updateEngineButtonUI(data.engine_running);
 
-                // Tickers
+                // Live Indices
                 if(data.market_indices) {
                     const n = data.market_indices.NIFTY;
                     const s = data.market_indices.SENSEX;
-                    if(n.ltp > 0) {
+                    if(n && n.ltp > 0) {
                         document.getElementById('nifty-spot').innerText = n.ltp;
                         const nSign = n.change >= 0 ? '+' : '';
                         const nElem = document.getElementById('nifty-chg');
                         nElem.innerText = `${nSign}${n.change} (${nSign}${n.pchange}%)`;
                         nElem.className = 'ticker-chg ' + (n.change >= 0 ? 'up-text' : 'down-text');
                     }
-                    if(s.ltp > 0) {
+                    if(s && s.ltp > 0) {
                         document.getElementById('sensex-spot').innerText = s.ltp;
                         const sSign = s.change >= 0 ? '+' : '';
                         const sElem = document.getElementById('sensex-chg');
