@@ -78,7 +78,7 @@ bot_state = {
     "c1_candidates": [],
     "active_trades": [],
     "trade_history": [],
-    "system_logs": [],
+    "system_logs": ["Terminal initialized. Waiting for broker connection..."],
     "status_log": "Terminal Ready. Please connect broker."
 }
 
@@ -144,7 +144,7 @@ def fetch_daily_pdh_pdl(token):
 
 def load_fno_universe():
     try:
-        log("Downloading Angel One Master & extracting ALL F&O Cash stocks...")
+        log("Fetching active F&O Cash stocks from Angel One Master...")
         url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
         res = requests.get(url, timeout=25)
         master = res.json()
@@ -166,7 +166,7 @@ def load_fno_universe():
                         "token": str(s.get('token'))
                     })
 
-        log(f"Found {len(matched_stocks)} total F&O Cash stocks. Loading PDH & PDL...")
+        log(f"Found {len(matched_stocks)} F&O Cash stocks. Loading PDH & PDL...")
 
         final_list = []
         for item in matched_stocks:
@@ -181,8 +181,7 @@ def load_fno_universe():
             })
 
         bot_state["fno_stocks"] = final_list
-        log(f"SUCCESS: {len(bot_state['fno_stocks'])} total F&O stocks fully loaded and ready!")
-        # Trigger an immediate calculation once pool is populated
+        log(f"SUCCESS: {len(bot_state['fno_stocks'])} F&O stocks fully loaded with PDH/PDL.")
         calculate_market_movers()
     except Exception as e:
         log(f"Universe sync error: {e}")
@@ -203,7 +202,7 @@ def api_login():
             bot_state["smart_api"] = smart_api
             bot_state["feed_token"] = smart_api.getfeedToken()
             bot_state["is_logged_in"] = True
-            log("Broker Connected! Engine active.")
+            log("Broker Connected! 5x Volume strategy engine armed.")
 
             threading.Thread(target=load_fno_universe, daemon=True).start()
             threading.Thread(target=background_scanner, daemon=True).start()
@@ -312,7 +311,6 @@ def manual_5x_scan():
 
 @app.route('/api/state', methods=['GET'])
 def get_state():
-    # Sync both keys so frontend never encounters an undefined state
     return jsonify({
         "logged_in": bot_state["is_logged_in"],
         "is_logged_in": bot_state["is_logged_in"],
@@ -358,6 +356,9 @@ def place_live_order(symbol, token, side, qty):
         log(f"LIVE ORDER ERROR: {e}")
         return None
 
+# =========================================================================
+# BOT EXECUTION ENGINE: PURE 5x VOLUME + PDH/PDL BREAKOUT + C2 CONFIRMATION
+# =========================================================================
 def background_scanner():
     c1_scanned = False
     c2_scanned = False
@@ -509,13 +510,12 @@ def background_scanner():
         time.sleep(1)
 
 def calculate_market_movers():
-    """Fail-proof calculation for Top Gainers, Losers, and Volume Buzzers"""
+    """Watch-only Market Movers Feed (Independent from Strategy Execution)"""
     if not bot_state["is_logged_in"] or not bot_state["fno_stocks"]:
         return
 
     stock_perf = []
-    # Sample from the dynamically loaded F&O pool
-    scan_universe = bot_state["fno_stocks"][:60]
+    scan_universe = bot_state["fno_stocks"][:50]
 
     for s in scan_universe:
         try:
@@ -527,11 +527,7 @@ def calculate_market_movers():
                 vol = int(d.get("trade_volume") or d.get("volume") or 0)
 
                 if ltp > 0:
-                    if close > 0:
-                        pchange = round(((ltp - close) / close) * 100, 2)
-                    else:
-                        pchange = 0.0
-
+                    pchange = round(((ltp - close) / close) * 100, 2) if close > 0 else 0.0
                     stock_perf.append({
                         "symbol": s["symbol"].replace("-EQ", ""),
                         "ltp": ltp,
@@ -580,8 +576,7 @@ def market_data_monitor():
         except Exception:
             bot_state["is_market_live"] = False
 
-        # Periodic Market Movers update
-        if now_ts - last_stats_check > 20:
+        if now_ts - last_stats_check > 25:
             last_stats_check = now_ts
             calculate_market_movers()
 
