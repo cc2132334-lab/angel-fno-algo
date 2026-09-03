@@ -63,7 +63,7 @@ bot_state = {
     "rr_ratio": saved_conf["rr_ratio"],
     "cutoff_time": saved_conf["cutoff_time"],
     "trades_executed_today": 0,
-    "fno_stocks": [],              # Poore 180+ F&O stocks with PDH & PDL
+    "fno_stocks": [],
     "is_market_live": False,
     "total_pnl": 0.0,
     "market_indices": {
@@ -143,14 +143,12 @@ def fetch_daily_pdh_pdl(token):
     return None, None, None
 
 def load_fno_universe():
-    """Angel One official Scrip Master se poore 100% active F&O Cash stocks dynamically fetch karta hai"""
     try:
         log("Downloading Angel One Master & extracting ALL F&O Cash stocks...")
         url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
         res = requests.get(url, timeout=25)
         master = res.json()
 
-        # Step 1: Saare F&O underlying names extract karo
         fno_names = set()
         for s in master:
             if s.get('exch_seg') == 'NFO' and s.get('instrumenttype') == 'FUTSTK':
@@ -158,7 +156,6 @@ def load_fno_universe():
                 if name:
                     fno_names.add(name.strip())
 
-        # Step 2: Unhi saare symbols ke NSE Cash (-EQ) tokens map karo
         matched_stocks = []
         for s in master:
             if s.get('exch_seg') == 'NSE' and str(s.get('symbol', '')).endswith('-EQ'):
@@ -169,9 +166,8 @@ def load_fno_universe():
                         "token": str(s.get('token'))
                     })
 
-        log(f"Found {len(matched_stocks)} total F&O Cash stocks. Loading PDH & PDL for entire universe...")
+        log(f"Found {len(matched_stocks)} total F&O Cash stocks. Loading PDH & PDL...")
 
-        # Step 3: Poore universe ka PDH / PDL calculate karo
         final_list = []
         for item in matched_stocks:
             time.sleep(0.04)
@@ -186,6 +182,8 @@ def load_fno_universe():
 
         bot_state["fno_stocks"] = final_list
         log(f"SUCCESS: {len(bot_state['fno_stocks'])} total F&O stocks fully loaded and ready!")
+        # Trigger an immediate calculation once pool is populated
+        calculate_market_movers()
     except Exception as e:
         log(f"Universe sync error: {e}")
 
@@ -274,7 +272,6 @@ def manual_5x_scan():
         return jsonify({"status": "error", "message": "F&O pool loading, retry in 5 seconds."})
 
     filtered_results = []
-    # Scans available F&O stocks
     for item in stocks_to_scan[:60]:
         time.sleep(0.1)
         params = {
@@ -315,6 +312,7 @@ def manual_5x_scan():
 
 @app.route('/api/state', methods=['GET'])
 def get_state():
+    # Sync both keys so frontend never encounters an undefined state
     return jsonify({
         "logged_in": bot_state["is_logged_in"],
         "is_logged_in": bot_state["is_logged_in"],
@@ -334,6 +332,7 @@ def get_state():
         "total_pnl": bot_state["total_pnl"],
         "market_indices": bot_state["market_indices"],
         "market_stats": bot_state["market_stats"],
+        "market_movers": bot_state["market_stats"],
         "c1_candidates": bot_state["c1_candidates"],
         "active_trades": bot_state["active_trades"],
         "trade_history": bot_state["trade_history"]
@@ -509,6 +508,46 @@ def background_scanner():
 
         time.sleep(1)
 
+def calculate_market_movers():
+    """Fail-proof calculation for Top Gainers, Losers, and Volume Buzzers"""
+    if not bot_state["is_logged_in"] or not bot_state["fno_stocks"]:
+        return
+
+    stock_perf = []
+    # Sample from the dynamically loaded F&O pool
+    scan_universe = bot_state["fno_stocks"][:60]
+
+    for s in scan_universe:
+        try:
+            res = bot_state["smart_api"].ltpData("NSE", s["symbol"], str(s["token"]))
+            if res and res.get("status") and res.get("data"):
+                d = res["data"]
+                ltp = float(d.get("ltp") or 0.0)
+                close = float(d.get("close") or s.get("prev_close") or ltp)
+                vol = int(d.get("trade_volume") or d.get("volume") or 0)
+
+                if ltp > 0:
+                    if close > 0:
+                        pchange = round(((ltp - close) / close) * 100, 2)
+                    else:
+                        pchange = 0.0
+
+                    stock_perf.append({
+                        "symbol": s["symbol"].replace("-EQ", ""),
+                        "ltp": ltp,
+                        "pchange": pchange,
+                        "volume": vol
+                    })
+        except Exception:
+            pass
+        time.sleep(0.02)
+
+    if len(stock_perf) >= 5:
+        df_p = pd.DataFrame(stock_perf)
+        bot_state["market_stats"]["top_gainers"] = df_p.sort_values(by="pchange", ascending=False).head(5).to_dict('records')
+        bot_state["market_stats"]["top_losers"] = df_p.sort_values(by="pchange", ascending=True).head(5).to_dict('records')
+        bot_state["market_stats"]["volume_buzzers"] = df_p.sort_values(by="volume", ascending=False).head(5).to_dict('records')
+
 def market_data_monitor():
     last_stats_check = 0
 
@@ -516,8 +555,7 @@ def market_data_monitor():
         now_ts = time.time()
         now_ist = get_ist_now()
 
-        # Real Market Open/Closed Evaluation
-        is_weekday = (now_ist.weekday() < 5) # Mon-Fri
+        is_weekday = (now_ist.weekday() < 5)
         is_time_window = (datetime.time(9, 15) <= now_ist.time() <= datetime.time(15, 30))
 
         try:
@@ -542,37 +580,10 @@ def market_data_monitor():
         except Exception:
             bot_state["is_market_live"] = False
 
-        # Real Market Movers across the dynamic universe (Every 20 seconds)
-        if (now_ts - last_stats_check > 20) and bot_state["fno_stocks"]:
+        # Periodic Market Movers update
+        if now_ts - last_stats_check > 20:
             last_stats_check = now_ts
-            stock_perf = []
-            # Scans liquid pool dynamically from live loaded stocks
-            scan_universe = bot_state["fno_stocks"][:50]
-            for s in scan_universe:
-                try:
-                    res = bot_state["smart_api"].ltpData("NSE", s["symbol"], str(s["token"]))
-                    if res and res.get("data"):
-                        d = res["data"]
-                        ltp = float(d["ltp"])
-                        close = float(s.get("prev_close") or d.get("close", ltp))
-                        if close > 0 and ltp > 0:
-                            pchange = round(((ltp - close) / close) * 100, 2)
-                            vol = int(d.get("trade_volume", 0) or 0)
-                            stock_perf.append({
-                                "symbol": s["symbol"].replace("-EQ", ""),
-                                "ltp": ltp,
-                                "pchange": pchange,
-                                "volume": vol
-                            })
-                except Exception:
-                    pass
-                time.sleep(0.03)
-
-            if len(stock_perf) > 0:
-                df_p = pd.DataFrame(stock_perf)
-                bot_state["market_stats"]["top_gainers"] = df_p.sort_values(by="pchange", ascending=False).head(5).to_dict('records')
-                bot_state["market_stats"]["top_losers"] = df_p.sort_values(by="pchange", ascending=True).head(5).to_dict('records')
-                bot_state["market_stats"]["volume_buzzers"] = df_p.sort_values(by="volume", ascending=False).head(5).to_dict('records')
+            calculate_market_movers()
 
         # Active Positions Trailing
         open_trades = [t for t in bot_state["active_trades"] if t["status"] == "OPEN"]
