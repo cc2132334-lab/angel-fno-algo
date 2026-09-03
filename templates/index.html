@@ -39,7 +39,6 @@
         .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
         .theme-btn { background: var(--card-bg); border: 1px solid var(--border); padding: 5px 10px; border-radius: 20px; font-size: 0.75rem; cursor: pointer; width: auto; margin: 0; }
 
-        /* Realtime Market Clock Bar */
         .clock-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
         .clock-time { font-size: 0.82rem; font-weight: 700; font-family: monospace; }
         .mkt-status { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; font-weight: 800; }
@@ -443,30 +442,33 @@
 
         function switchStatsTab(tab, btn) {
             currentStatsTab = tab;
-            document.querySelectorAll('.tabs button').forEach(b => {
-                if(b.parentNode === btn.parentNode) b.classList.remove('active');
-            });
+            document.querySelectorAll('.card:nth-of-type(4) .tabs button').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             renderStats();
         }
 
         function switchTradesTab(tab, btn) {
-            document.querySelectorAll('.tabs button').forEach(b => {
-                if(b.parentNode === btn.parentNode) b.classList.remove('active');
-            });
+            document.querySelectorAll('.card:nth-of-type(5) .tabs button').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            document.getElementById('active-view').style.display = 'none';
-            document.getElementById('history-view').style.display = 'none';
-            document.getElementById('logs-view').style.display = 'none';
 
-            if(tab === 'active') document.getElementById('active-view').style.display = 'block';
-            else if(tab === 'history') document.getElementById('history-view').style.display = 'block';
-            else if(tab === 'logs') document.getElementById('logs-view').style.display = 'block';
+            const actV = document.getElementById('active-view');
+            const hisV = document.getElementById('history-view');
+            const logV = document.getElementById('logs-view');
+
+            actV.style.display = 'none';
+            hisV.style.display = 'none';
+            logV.style.display = 'none';
+
+            if(tab === 'active') actV.style.display = 'block';
+            else if(tab === 'history') hisV.style.display = 'block';
+            else if(tab === 'logs') {
+                logV.style.display = 'block';
+                renderLogs();
+            }
         }
 
         function renderStats() {
             if(!cachedState) return;
-            // Flexible resolution between stats and movers keys
             const pool = cachedState.market_stats || cachedState.market_movers;
             if(!pool) return;
 
@@ -476,7 +478,7 @@
             else if(currentStatsTab === 'losers') list = pool.top_losers || [];
             else if(currentStatsTab === 'volume') { list = pool.volume_buzzers || []; isVol = true; }
 
-            if(list.length === 0) {
+            if(!list || list.length === 0) {
                 document.getElementById('stats-body').innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Loading real market data...</td></tr>`;
                 return;
             }
@@ -489,6 +491,15 @@
                 html += `<tr><td><b>${item.symbol}</b>${extra}</td><td>₹${item.ltp}</td><td class="${cls}"><b>${sign}${item.pchange}%</b></td></tr>`;
             });
             document.getElementById('stats-body').innerHTML = html;
+        }
+
+        function renderLogs() {
+            if(!cachedState || !cachedState.system_logs) return;
+            let logsHtml = '';
+            cachedState.system_logs.slice().reverse().forEach(l => {
+                logsHtml += `<div class="log-entry">${l}</div>`;
+            });
+            document.getElementById('logs-container').innerHTML = logsHtml || "No logs yet.";
         }
 
         async function refresh() {
@@ -582,13 +593,9 @@
                     document.getElementById('history-body').innerHTML = histHtml;
                 }
 
-                // Activity Logs
-                if(data.system_logs && data.system_logs.length > 0) {
-                    let logsHtml = '';
-                    data.system_logs.slice().reverse().forEach(l => {
-                        logsHtml += `<div class="log-entry">${l}</div>`;
-                    });
-                    document.getElementById('logs-container').innerHTML = logsHtml;
+                // Update Logs if view is open
+                if(document.getElementById('logs-view').style.display === 'block') {
+                    renderLogs();
                 }
 
             } catch(e) {}
