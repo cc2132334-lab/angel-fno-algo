@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⚡ Algo Terminal Live</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background: #0a0f1d; color: #f1f5f9; padding: 12px; padding-bottom: 50px; }
+        .card { background: #131d31; border-radius: 12px; padding: 14px; margin-bottom: 12px; border: 1px solid #1e2e4a; }
+        h2 { font-size: 0.95rem; color: #38bdf8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+        input, button { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #2a3d5e; background: #0a0f1d; color: white; margin-top: 8px; font-size: 0.95rem; }
+        button { font-weight: bold; border: none; cursor: pointer; }
+        .btn-primary { background: #0284c7; }
+        .status-box { background: #041b2d; color: #38bdf8; padding: 10px; border-radius: 8px; font-size: 0.8rem; font-family: monospace; border: 1px dashed #0284c7; margin-bottom: 12px; }
+        .slider-box { display: flex; justify-content: space-between; align-items: center; }
+        .slider-box span { color: #4ade80; font-size: 1.25rem; font-weight: bold; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 8px; }
+        th, td { padding: 8px 4px; text-align: left; border-bottom: 1px solid #1e2e4a; }
+        th { color: #64748b; }
+        .tag-buy { color: #4ade80; background: rgba(74, 222, 128, 0.15); padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+        .tag-sell { color: #f87171; background: rgba(248, 113, 113, 0.15); padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+        .tag-paper { color: #38bdf8; background: rgba(56, 189, 248, 0.15); padding: 2px 5px; border-radius: 3px; font-size: 0.7rem; }
+        .tag-live { color: #ef4444; background: rgba(239, 68, 68, 0.15); padding: 2px 5px; border-radius: 3px; font-size: 0.7rem; }
+    </style>
+</head>
+<body>
+
+    <div class="status-box" id="system-status">Checking server status...</div>
+
+    <!-- Mode Selector & PnL Summary -->
+    <div class="card" style="border-left: 4px solid #f59e0b;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <div>
+                <span style="font-size: 0.75rem; color: #94a3b8;">TODAY'S NET P&L</span>
+                <div id="pnl-display" style="font-size: 1.3rem; font-weight: bold; color: #94a3b8;">₹0.00</div>
+            </div>
+            <div id="mode-badge" style="font-size: 0.75rem; font-weight: bold; color: #38bdf8;">SIMULATION MODE</div>
+        </div>
+        <div style="display: flex; gap: 8px;">
+            <button id="btn-paper" onclick="switchMode('PAPER')" style="flex: 1; background: #0284c7; color: white;">📝 Paper Mode</button>
+            <button id="btn-live" onclick="switchMode('LIVE')" style="flex: 1; background: #1e2e4a; color: #94a3b8;">🔴 Live Trading</button>
+        </div>
+    </div>
+
+    <!-- Login Form -->
+    <div class="card" id="login-card">
+        <h2>Angel One Login</h2>
+        <input type="text" id="api_key" placeholder="SmartAPI Key">
+        <input type="text" id="client_code" placeholder="Client ID">
+        <input type="password" id="pin" placeholder="MPIN">
+        <input type="password" id="totp_secret" placeholder="TOTP Secret Key">
+        <button class="btn-primary" onclick="login()">Connect Broker</button>
+    </div>
+
+    <!-- Risk Slider -->
+    <div class="card">
+        <h2>Risk Per Signal Allocation</h2>
+        <div class="slider-box">
+            <label style="font-size: 0.85rem; color: #94a3b8;">Max Risk:</label>
+            <span id="risk-val">₹500</span>
+        </div>
+        <input type="range" id="risk-slider" min="50" max="5000" step="50" value="500" oninput="changeRisk(this.value)">
+    </div>
+
+    <!-- C1 Candidates Table -->
+    <div class="card">
+        <h2>📊 5x Volume Qualified (C1)</h2>
+        <table>
+            <thead>
+                <tr><th>Symbol</th><th>Ratio</th><th>C1 High</th><th>C1 Low</th></tr>
+            </thead>
+            <tbody id="c1-body">
+                <tr><td colspan="4" style="text-align:center; color:#64748b;">Waiting for 9:20 AM scan...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Executed Trades Table -->
+    <div class="card">
+        <h2>🚀 Trade Executions (C2 Breakout)</h2>
+        <table>
+            <thead>
+                <tr><th>Symbol</th><th>Side</th><th>Entry</th><th>SL / TGT</th><th>Qty</th><th>P&L</th><th>Status</th></tr>
+            </thead>
+            <tbody id="trades-body">
+                <tr><td colspan="7" style="text-align:center; color:#64748b;">No trades executed yet</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        async function login() {
+            const payload = {
+                api_key: document.getElementById('api_key').value,
+                client_code: document.getElementById('client_code').value,
+                pin: document.getElementById('pin').value,
+                totp_secret: document.getElementById('totp_secret').value
+            };
+            document.getElementById('system-status').innerText = "Connecting to Angel One...";
+            const res = await fetch('/api/login', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            alert(data.message);
+            if(data.status === 'success') {
+                document.getElementById('login-card').style.display = 'none';
+            }
+        }
+
+        async function changeRisk(val) {
+            document.getElementById('risk-val').innerText = '₹' + val;
+            await fetch('/api/set-risk', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({risk: val})
+            });
+        }
+
+        async function switchMode(mode) {
+            if (mode === 'LIVE') {
+                const conf = confirm("⚠️ ALERT: Real orders will hit your Angel One account. Confirm Live Trading?");
+                if (!conf) return;
+            }
+            const res = await fetch('/api/set-mode', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({mode: mode})
+            });
+            const data = await res.json();
+            if(data.status === 'success') updateModeUI(mode);
+        }
+
+        function updateModeUI(mode) {
+            const bPaper = document.getElementById('btn-paper');
+            const bLive = document.getElementById('btn-live');
+            const bBadge = document.getElementById('mode-badge');
+            if(mode === 'LIVE') {
+                bLive.style.background = '#dc2626'; bLive.style.color = '#fff';
+                bPaper.style.background = '#1e2e4a'; bPaper.style.color = '#94a3b8';
+                bBadge.innerText = '🔴 REAL TRADING ACTIVE'; bBadge.style.color = '#ef4444';
+            } else {
+                bPaper.style.background = '#0284c7'; bPaper.style.color = '#fff';
+                bLive.style.background = '#1e2e4a'; bLive.style.color = '#94a3b8';
+                bBadge.innerText = '📝 SIMULATION MODE'; bBadge.style.color = '#38bdf8';
+            }
+        }
+
+        async function refresh() {
+            try {
+                const res = await fetch('/api/state');
+                const data = await res.json();
+
+                document.getElementById('system-status').innerText = data.status;
+                if(data.logged_in) document.getElementById('login-card').style.display = 'none';
+
+                // PnL Update
+                const pnlElem = document.getElementById('pnl-display');
+                pnlElem.innerText = (data.total_pnl >= 0 ? '+₹' : '-₹') + Math.abs(data.total_pnl);
+                pnlElem.style.color = data.total_pnl >= 0 ? '#4ade80' : '#f87171';
+
+                // C1 Table
+                if(data.c1_candidates.length > 0) {
+                    let html = '';
+                    data.c1_candidates.forEach(c => {
+                        html += `<tr><td><b>${c.symbol}</b></td><td>${c.ratio}x</td><td>${c.c1_high}</td><td>${c.c1_low}</td></tr>`;
+                    });
+                    document.getElementById('c1-body').innerHTML = html;
+                }
+
+                // Trades Table
+                if(data.active_trades.length > 0) {
+                    let html = '';
+                    data.active_trades.forEach(t => {
+                        const tag = t.side === 'BUY' ? 'tag-buy' : 'tag-sell';
+                        const mTag = t.mode === 'LIVE' ? 'tag-live' : 'tag-paper';
+                        const pnlColor = t.pnl >= 0 ? '#4ade80' : '#f87171';
+                        html += `<tr>
+                            <td><b>${t.symbol}</b> <span class="${mTag}">${t.mode}</span><br><small style="color:#64748b">${t.time}</small></td>
+                            <td><span class="${tag}">${t.side}</span></td>
+                            <td>${t.entry}</td>
+                            <td>${t.sl}<br><small style="color:#38bdf8;">${t.target}</small></td>
+                            <td>${t.qty}</td>
+                            <td style="color:${pnlColor}; font-weight:bold;">${t.pnl}</td>
+                            <td><b>${t.status}</b></td>
+                        </tr>`;
+                    });
+                    document.getElementById('trades-body').innerHTML = html;
+                }
+            } catch(e) {}
+        }
+
+        setInterval(refresh, 3000);
+        refresh();
+    </script>
+</body>
+</html>
