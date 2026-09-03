@@ -72,6 +72,7 @@
         <button class="theme-btn" onclick="toggleTheme()" id="theme-btn">☀️ Light Mode</button>
     </div>
 
+    <!-- 1. FIRST SCREEN: BROKER LOGIN (MANDATORY TO UNLOCK TERMINAL) -->
     <div class="card" id="login-card" style="border: 2px solid var(--accent); padding: 20px;">
         <h2 style="font-size: 1.1rem; margin-bottom: 12px; text-align: center;">🔐 Connect Angel One Broker</h2>
         <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px; text-align: center;">Terminal ko access karne ke liye broker connect karein.</p>
@@ -82,8 +83,10 @@
         <button id="login-btn" style="background: var(--accent); color: white; margin-top: 14px; padding: 12px;" onclick="login()">Connect Broker & Unlock Terminal</button>
     </div>
 
+    <!-- 2. MAIN TERMINAL (HIDDEN UNTIL LOGIN SUCCESS) -->
     <div id="main-terminal" style="display: none;">
         
+        <!-- Live NIFTY / SENSEX -->
         <div class="ticker-bar">
             <div class="ticker-box">
                 <div class="ticker-name">NIFTY 50</div>
@@ -99,6 +102,7 @@
 
         <div class="status-box" id="system-status">Terminal Active.</div>
 
+        <!-- Engine Control & Net P&L -->
         <div class="card" style="border-left: 4px solid #f59e0b;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                 <div>
@@ -114,6 +118,7 @@
             <button id="btn-engine" onclick="toggleEngine()" style="background: #16a34a; color: white;">🟢 ENGINE RUNNING (Click to Pause)</button>
         </div>
 
+        <!-- BOT CONTROLS (Max Trade, RR 1:1 - 1:10, Cutoff Time) -->
         <div class="card">
             <h2>⚙️ Bot Configuration & Limits</h2>
             
@@ -161,6 +166,7 @@
             </div>
         </div>
 
+        <!-- MANUAL SCANNER: 5X VOLUME ON F&O CASH STOCKS WITH DATE SELECTION -->
         <div class="card">
             <h2>🔍 Manual 5x Volume Scanner (F&O Cash Only)</h2>
             <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 8px;">Date select karke 9:15-9:20 AM C1 candle ka 5x Volume breakout scan karein.</p>
@@ -195,6 +201,7 @@
             </div>
         </div>
 
+        <!-- Market Stats Tabs -->
         <div class="card">
             <h2>📊 Market Movers</h2>
             <div class="tabs">
@@ -208,6 +215,7 @@
             </table>
         </div>
 
+        <!-- Positions & Trade History -->
         <div class="card">
             <div class="tabs">
                 <button class="tab-btn active" onclick="switchTradesTab('active', this)">⚡ Active Positions</button>
@@ -236,7 +244,6 @@
         let isEngineRunning = true;
         let cachedState = null;
 
-        // Set default date picker to today
         document.getElementById('scan-date').value = new Date().toISOString().split('T')[0];
 
         function toggleTheme() {
