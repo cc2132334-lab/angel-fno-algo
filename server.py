@@ -30,9 +30,10 @@ def load_saved_config():
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r") as f:
-                return {**default_config, **json.load(f)}
-        except Exception:
-            pass
+                saved = json.load(f)
+                return {**default_config, **saved}
+        except Exception as e:
+            print(f"Error loading config file: {e}")
     return default_config
 
 def save_config():
@@ -46,7 +47,8 @@ def save_config():
             "trading_mode": bot_state["trading_mode"]
         }
         with open(CONFIG_FILE, "w") as f:
-            json.dump(data, f)
+            json.dump(data, f, indent=4)
+        print("Config saved successfully:", data)
     except Exception as e:
         print(f"Config save error: {e}")
 
@@ -57,11 +59,11 @@ bot_state = {
     "engine_running": saved_conf["engine_running"],
     "smart_api": None,
     "feed_token": None,
-    "risk_amount": saved_conf["risk_amount"],
+    "risk_amount": int(saved_conf["risk_amount"]),
     "trading_mode": saved_conf["trading_mode"],
-    "max_trades": saved_conf["max_trades"],
-    "rr_ratio": saved_conf["rr_ratio"],
-    "cutoff_time": saved_conf["cutoff_time"],
+    "max_trades": int(saved_conf["max_trades"]),
+    "rr_ratio": int(saved_conf["rr_ratio"]),
+    "cutoff_time": str(saved_conf["cutoff_time"]),
     "trades_executed_today": 0,
     "fno_stocks": [],
     "is_market_live": False,
@@ -144,44 +146,49 @@ def fetch_daily_pdh_pdl(token):
 
 def load_fno_universe():
     try:
-        log("Fetching active F&O Cash stocks from Angel One Master...")
+        log("Downloading Angel One Master & extracting complete active F&O Cash stocks...")
         url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
         res = requests.get(url, timeout=25)
         master = res.json()
 
-        fno_names = set()
+        fno_symbols = set()
         for s in master:
             if s.get('exch_seg') == 'NFO' and s.get('instrumenttype') == 'FUTSTK':
-                name = s.get('name')
-                if name:
-                    fno_names.add(name.strip())
+                base_name = s.get('name', '').strip()
+                if base_name:
+                    fno_symbols.add(base_name.upper())
 
         matched_stocks = []
         for s in master:
-            if s.get('exch_seg') == 'NSE' and str(s.get('symbol', '')).endswith('-EQ'):
-                sym_clean = s.get('name', '').strip()
-                if sym_clean in fno_names:
-                    matched_stocks.append({
-                        "symbol": s.get('symbol'),
-                        "token": str(s.get('token'))
-                    })
+            if s.get('exch_seg') == 'NSE':
+                sym = str(s.get('symbol', ''))
+                if sym.endswith('-EQ'):
+                    clean_name = sym.replace('-EQ', '').strip().upper()
+                    token = str(s.get('token'))
+                    if clean_name in fno_symbols:
+                        matched_stocks.append({
+                            "symbol": sym,
+                            "name": clean_name,
+                            "token": token
+                        })
 
-        log(f"Found {len(matched_stocks)} F&O Cash stocks. Loading PDH & PDL...")
+        log(f"Detected {len(matched_stocks)} verified F&O Cash stocks. Loading PDH & PDL...")
 
         final_list = []
         for item in matched_stocks:
-            time.sleep(0.04)
+            time.sleep(0.03)
             pdh, pdl, prev_close = fetch_daily_pdh_pdl(item["token"])
             final_list.append({
                 "symbol": item["symbol"],
                 "token": item["token"],
+                "name": item["name"],
                 "pdh": pdh or 0.0,
                 "pdl": pdl or 0.0,
                 "prev_close": prev_close or 0.0
             })
 
         bot_state["fno_stocks"] = final_list
-        log(f"SUCCESS: {len(bot_state['fno_stocks'])} F&O stocks fully loaded with PDH/PDL.")
+        log(f"SUCCESS: All {len(bot_state['fno_stocks'])} F&O stocks loaded. No stock left behind.")
         calculate_market_movers()
     except Exception as e:
         log(f"Universe sync error: {e}")
@@ -226,8 +233,16 @@ def update_settings():
     if "risk_amount" in data:
         bot_state["risk_amount"] = int(data["risk_amount"])
     save_config()
-    log("Settings updated.")
-    return jsonify({"status": "success"})
+    log(f"Settings Saved: Trades={bot_state['max_trades']}, RR=1:{bot_state['rr_ratio']}, Risk=₹{bot_state['risk_amount']}, Cutoff={bot_state['cutoff_time']}")
+    return jsonify({
+        "status": "success",
+        "settings": {
+            "max_trades": bot_state["max_trades"],
+            "rr_ratio": bot_state["rr_ratio"],
+            "cutoff_time": bot_state["cutoff_time"],
+            "risk_amount": bot_state["risk_amount"]
+        }
+    })
 
 @app.route('/api/toggle-engine', methods=['POST'])
 def toggle_engine():
@@ -271,8 +286,8 @@ def manual_5x_scan():
         return jsonify({"status": "error", "message": "F&O pool loading, retry in 5 seconds."})
 
     filtered_results = []
-    for item in stocks_to_scan[:60]:
-        time.sleep(0.1)
+    for item in stocks_to_scan[:70]:
+        time.sleep(0.08)
         params = {
             "exchange": "NSE",
             "symboltoken": str(item["token"]),
@@ -356,9 +371,6 @@ def place_live_order(symbol, token, side, qty):
         log(f"LIVE ORDER ERROR: {e}")
         return None
 
-# =========================================================================
-# BOT EXECUTION ENGINE: PURE 5x VOLUME + PDH/PDL BREAKOUT + C2 CONFIRMATION
-# =========================================================================
 def background_scanner():
     c1_scanned = False
     c2_scanned = False
@@ -380,13 +392,12 @@ def background_scanner():
             time.sleep(5)
             continue
 
-        # 09:20 AM - C1 Filter on ALL F&O Stocks
         if not c1_scanned and now_time >= datetime.time(9, 20, 2):
-            log(f"09:20 AM: Scanning ALL {len(bot_state['fno_stocks'])} F&O stocks for 5x Volume + PDH/PDL Breakout...")
+            log(f"09:20 AM: Scanning all {len(bot_state['fno_stocks'])} F&O stocks for 5x Volume + PDH/PDL Breakout...")
             candidates = []
 
             for item in bot_state["fno_stocks"]:
-                time.sleep(0.08)
+                time.sleep(0.06)
                 df = fetch_candles(item["token"])
                 if df is not None and len(df) >= 22:
                     avg_vol = df.iloc[-22:-2]["volume"].mean()
@@ -418,13 +429,12 @@ def background_scanner():
                                 "pdl": pdl,
                                 "ratio": round(c1_vol / avg_vol, 2)
                             })
-                            log(f"Setup Qualified: {item['symbol']} ({round(c1_vol/avg_vol, 2)}x Vol) [{bias}]")
+                            log(f"Qualified: {item['symbol']} ({round(c1_vol/avg_vol, 2)}x Vol) [{bias}]")
 
             bot_state["c1_candidates"] = candidates
             log(f"C1 Scan Complete: {len(candidates)} candidate(s) ready for 9:25 AM C2 validation.")
             c1_scanned = True
 
-        # 09:25 AM - C2 Confirmation Rules
         if c1_scanned and not c2_scanned and now_time >= datetime.time(9, 25, 2):
             log("09:25 AM: Validating C2 Setup and Triggering Orders...")
 
@@ -432,7 +442,7 @@ def background_scanner():
                 if bot_state["trades_executed_today"] >= bot_state["max_trades"]:
                     break
 
-                time.sleep(0.15)
+                time.sleep(0.12)
                 df = fetch_candles(cand["token"])
                 if df is not None and len(df) >= 2:
                     c2 = df.iloc[-1]
@@ -510,14 +520,11 @@ def background_scanner():
         time.sleep(1)
 
 def calculate_market_movers():
-    """Watch-only Market Movers Feed (Independent from Strategy Execution)"""
     if not bot_state["is_logged_in"] or not bot_state["fno_stocks"]:
         return
 
     stock_perf = []
-    scan_universe = bot_state["fno_stocks"][:50]
-
-    for s in scan_universe:
+    for s in bot_state["fno_stocks"]:
         try:
             res = bot_state["smart_api"].ltpData("NSE", s["symbol"], str(s["token"]))
             if res and res.get("status") and res.get("data"):
@@ -536,13 +543,13 @@ def calculate_market_movers():
                     })
         except Exception:
             pass
-        time.sleep(0.02)
+        time.sleep(0.015)
 
     if len(stock_perf) >= 5:
         df_p = pd.DataFrame(stock_perf)
-        bot_state["market_stats"]["top_gainers"] = df_p.sort_values(by="pchange", ascending=False).head(5).to_dict('records')
-        bot_state["market_stats"]["top_losers"] = df_p.sort_values(by="pchange", ascending=True).head(5).to_dict('records')
-        bot_state["market_stats"]["volume_buzzers"] = df_p.sort_values(by="volume", ascending=False).head(5).to_dict('records')
+        bot_state["market_stats"]["top_gainers"] = df_p.sort_values(by="pchange", ascending=False).head(8).to_dict('records')
+        bot_state["market_stats"]["top_losers"] = df_p.sort_values(by="pchange", ascending=True).head(8).to_dict('records')
+        bot_state["market_stats"]["volume_buzzers"] = df_p.sort_values(by="volume", ascending=False).head(8).to_dict('records')
 
 def market_data_monitor():
     last_stats_check = 0
@@ -576,11 +583,10 @@ def market_data_monitor():
         except Exception:
             bot_state["is_market_live"] = False
 
-        if now_ts - last_stats_check > 25:
+        if now_ts - last_stats_check > 30:
             last_stats_check = now_ts
             calculate_market_movers()
 
-        # Active Positions Trailing
         open_trades = [t for t in bot_state["active_trades"] if t["status"] == "OPEN"]
         for trade in open_trades:
             try:
@@ -619,12 +625,12 @@ def market_data_monitor():
                             trade["sl"] = trade["entry"]
                             log(f"1:2 Hit on {trade['symbol']}! Booked 50%. SL trailed to Cost.")
 
-                        if ltp >= trade["sl"]:
+                        if ltp <= trade["sl"]:
                             trade["status"] = "SL / TRAIL HIT"
                             if trade["mode"] == "LIVE":
                                 place_live_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
                             record_trade_history(trade, ltp)
-                        elif ltp <= trade["target"]:
+                        elif ltp >= trade["target"]:
                             trade["status"] = "FULL TARGET HIT"
                             if trade["mode"] == "LIVE":
                                 place_live_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
