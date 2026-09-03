@@ -6,15 +6,16 @@
     <title>⚡ Algo Terminal Live</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        body { background: #0a0f1d; color: #f1f5f9; padding: 12px; padding-bottom: 50px; }
+        body { background: #0a0f1d; color: #f1f5f9; padding: 12px; padding-bottom: 60px; }
         .card { background: #131d31; border-radius: 12px; padding: 14px; margin-bottom: 12px; border: 1px solid #1e2e4a; }
         h2 { font-size: 0.95rem; color: #38bdf8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
-        input, button { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #2a3d5e; background: #0a0f1d; color: white; margin-top: 8px; font-size: 0.95rem; }
+        input, button, select { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #2a3d5e; background: #0a0f1d; color: white; margin-top: 8px; font-size: 0.95rem; }
         button { font-weight: bold; border: none; cursor: pointer; }
-        .btn-primary { background: #0284c7; }
+        .ticker-bar { display: flex; gap: 8px; margin-bottom: 12px; }
+        .ticker-box { flex: 1; background: #111a2e; border: 1px solid #1e2e4a; border-radius: 8px; padding: 10px; text-align: center; }
+        .ticker-name { font-size: 0.75rem; color: #94a3b8; }
+        .ticker-val { font-size: 1.15rem; font-weight: bold; color: #38bdf8; margin-top: 2px; }
         .status-box { background: #041b2d; color: #38bdf8; padding: 10px; border-radius: 8px; font-size: 0.8rem; font-family: monospace; border: 1px dashed #0284c7; margin-bottom: 12px; }
-        .slider-box { display: flex; justify-content: space-between; align-items: center; }
-        .slider-box span { color: #4ade80; font-size: 1.25rem; font-weight: bold; }
         table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 8px; }
         th, td { padding: 8px 4px; text-align: left; border-bottom: 1px solid #1e2e4a; }
         th { color: #64748b; }
@@ -26,9 +27,19 @@
 </head>
 <body>
 
+    <div class="ticker-bar">
+        <div class="ticker-box">
+            <div class="ticker-name">NIFTY 50 SPOT</div>
+            <div class="ticker-val" id="nifty-spot">--</div>
+        </div>
+        <div class="ticker-box">
+            <div class="ticker-name">SENSEX SPOT</div>
+            <div class="ticker-val" id="sensex-spot">--</div>
+        </div>
+    </div>
+
     <div class="status-box" id="system-status">Checking server status...</div>
 
-    <!-- Mode Selector & PnL Summary -->
     <div class="card" style="border-left: 4px solid #f59e0b;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
             <div>
@@ -37,35 +48,54 @@
             </div>
             <div id="mode-badge" style="font-size: 0.75rem; font-weight: bold; color: #38bdf8;">SIMULATION MODE</div>
         </div>
-        <div style="display: flex; gap: 8px;">
+
+        <div style="display: flex; gap: 8px; margin-bottom: 10px;">
             <button id="btn-paper" onclick="switchMode('PAPER')" style="flex: 1; background: #0284c7; color: white;">📝 Paper Mode</button>
-            <button id="btn-live" onclick="switchMode('LIVE')" style="flex: 1; background: #1e2e4a; color: #94a3b8;">🔴 Live Trading</button>
+            <button id="btn-live" onclick="switchMode('LIVE')" style="flex: 1; background: #1e2e4a; color: #94a3b8;">🔴 Live Mode</button>
         </div>
+
+        <button id="btn-engine-toggle" onclick="toggleEngine()" style="background: #16a34a; color: white; padding: 10px;">
+            🟢 ENGINE RUNNING (Click to Stop)
+        </button>
     </div>
 
-    <!-- Login Form -->
     <div class="card" id="login-card">
         <h2>Angel One Login</h2>
         <input type="text" id="api_key" placeholder="SmartAPI Key">
         <input type="text" id="client_code" placeholder="Client ID">
         <input type="password" id="pin" placeholder="MPIN">
         <input type="password" id="totp_secret" placeholder="TOTP Secret Key">
-        <button class="btn-primary" onclick="login()">Connect Broker</button>
+        <button style="background:#0284c7;" onclick="login()">Connect Broker</button>
     </div>
 
-    <!-- Risk Slider -->
     <div class="card">
         <h2>Risk Per Signal Allocation</h2>
-        <div class="slider-box">
-            <label style="font-size: 0.85rem; color: #94a3b8;">Max Risk:</label>
-            <span id="risk-val">₹500</span>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <label style="font-size: 0.85rem; color: #94a3b8;">Max Risk per Trade:</label>
+            <span id="risk-val" style="color: #4ade80; font-size: 1.25rem; font-weight: bold;">₹500</span>
         </div>
         <input type="range" id="risk-slider" min="50" max="5000" step="50" value="500" oninput="changeRisk(this.value)">
     </div>
 
-    <!-- C1 Candidates Table -->
+    <div class="card" style="border-left: 4px solid #a855f7;">
+        <h2>🔍 Historical / Offline Date Scanner</h2>
+        <p style="font-size:0.75rem; color:#94a3b8; margin-top:2px;">Kisibhi din ka C1 5x Volume breakout check karein:</p>
+        <div style="display: flex; gap: 8px; margin-top: 8px;">
+            <input type="date" id="scan-date" style="flex: 2; margin-top: 0;">
+            <button onclick="runOfflineScan()" style="flex: 1; background: #7e22ce; margin-top: 0;">Scan Date</button>
+        </div>
+        <table style="margin-top: 10px;">
+            <thead>
+                <tr><th>Symbol</th><th>Ratio</th><th>C1 High</th><th>C1 Low</th><th>Vol / Avg</th></tr>
+            </thead>
+            <tbody id="offline-body">
+                <tr><td colspan="5" style="text-align:center; color:#64748b;">Select date and click scan</td></tr>
+            </tbody>
+        </table>
+    </div>
+
     <div class="card">
-        <h2>📊 5x Volume Qualified (C1)</h2>
+        <h2>📊 Today's 5x Volume Breakouts (C1)</h2>
         <table>
             <thead>
                 <tr><th>Symbol</th><th>Ratio</th><th>C1 High</th><th>C1 Low</th></tr>
@@ -76,7 +106,6 @@
         </table>
     </div>
 
-    <!-- Executed Trades Table -->
     <div class="card">
         <h2>🚀 Trade Executions (C2 Breakout)</h2>
         <table>
@@ -90,6 +119,8 @@
     </div>
 
     <script>
+        let isEngineRunning = true;
+
         async function login() {
             const payload = {
                 api_key: document.getElementById('api_key').value,
@@ -105,8 +136,29 @@
             });
             const data = await res.json();
             alert(data.message);
-            if(data.status === 'success') {
-                document.getElementById('login-card').style.display = 'none';
+            if(data.status === 'success') document.getElementById('login-card').style.display = 'none';
+        }
+
+        async function toggleEngine() {
+            isEngineRunning = !isEngineRunning;
+            const res = await fetch('/api/toggle-engine', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({running: isEngineRunning})
+            });
+            const data = await res.json();
+            updateEngineUI(data.engine_running);
+        }
+
+        function updateEngineUI(running) {
+            isEngineRunning = running;
+            const btn = document.getElementById('btn-engine-toggle');
+            if(running) {
+                btn.innerText = "🟢 ENGINE RUNNING (Click to Stop)";
+                btn.style.background = "#16a34a";
+            } else {
+                btn.innerText = "🛑 ENGINE STOPPED (Click to Start)";
+                btn.style.background = "#dc2626";
             }
         }
 
@@ -121,7 +173,7 @@
 
         async function switchMode(mode) {
             if (mode === 'LIVE') {
-                const conf = confirm("⚠️ ALERT: Real orders will hit your Angel One account. Confirm Live Trading?");
+                const conf = confirm("⚠️ ALERT: Real money orders will hit Angel One! Are you sure?");
                 if (!conf) return;
             }
             const res = await fetch('/api/set-mode', {
@@ -148,6 +200,38 @@
             }
         }
 
+        async function runOfflineScan() {
+            const dateVal = document.getElementById('scan-date').value;
+            if(!dateVal) { alert("Please select a date first!"); return; }
+            document.getElementById('offline-body').innerHTML = `<tr><td colspan="5" style="text-align:center; color:#38bdf8;">Scanning stocks for ${dateVal}... Please wait.</td></tr>`;
+
+            const res = await fetch('/api/offline-scan', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({date: dateVal})
+            });
+            const resData = await res.json();
+            if(resData.status === 'success') {
+                if(resData.data.length === 0) {
+                    document.getElementById('offline-body').innerHTML = `<tr><td colspan="5" style="text-align:center; color:#64748b;">No 5x volume candidates found on ${resData.date}.</td></tr>`;
+                } else {
+                    let html = '';
+                    resData.data.forEach(item => {
+                        html += `<tr>
+                            <td><b>${item.symbol}</b></td>
+                            <td style="color:#4ade80; font-weight:bold;">${item.ratio}x</td>
+                            <td>${item.c1_high}</td>
+                            <td>${item.c1_low}</td>
+                            <td>${item.c1_vol} / ${item.avg_vol}</td>
+                        </tr>`;
+                    });
+                    document.getElementById('offline-body').innerHTML = html;
+                }
+            } else {
+                alert(resData.message);
+            }
+        }
+
         async function refresh() {
             try {
                 const res = await fetch('/api/state');
@@ -156,7 +240,13 @@
                 document.getElementById('system-status').innerText = data.status;
                 if(data.logged_in) document.getElementById('login-card').style.display = 'none';
 
-                // PnL Update
+                // Tickers
+                if(data.market_indices) {
+                    if(data.market_indices.NIFTY > 0) document.getElementById('nifty-spot').innerText = data.market_indices.NIFTY;
+                    if(data.market_indices.SENSEX > 0) document.getElementById('sensex-spot').innerText = data.market_indices.SENSEX;
+                }
+
+                // PnL
                 const pnlElem = document.getElementById('pnl-display');
                 pnlElem.innerText = (data.total_pnl >= 0 ? '+₹' : '-₹') + Math.abs(data.total_pnl);
                 pnlElem.style.color = data.total_pnl >= 0 ? '#4ade80' : '#f87171';
