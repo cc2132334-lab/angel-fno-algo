@@ -77,8 +77,7 @@ bot_state = {
     "c1_candidates": [],
     "active_trades": [],
     "trade_history": [],
-    "manual_scan_result": None,
-    "status_log": f"Terminal Ready. Last Engine State: {'RUNNING' if saved_conf['engine_running'] else 'PAUSED'}"
+    "status_log": f"Broker disconnected. Please login to continue."
 }
 
 def log(msg):
@@ -111,7 +110,7 @@ def load_fno_symbols():
                     stocks.append({"symbol": f"{sym}-EQ", "token": nse_equities[sym]})
 
         bot_state["fno_stocks"] = stocks[:150]
-        log(f"Loaded {len(bot_state['fno_stocks'])} Stocks.")
+        log(f"Loaded {len(bot_state['fno_stocks'])} FnO Cash Stocks.")
     except Exception as e:
         log(f"Error loading scrip master: {e}")
 
@@ -131,7 +130,7 @@ def api_login():
             bot_state["smart_api"] = smart_api
             bot_state["feed_token"] = smart_api.getfeedToken()
             bot_state["is_logged_in"] = True
-            log("Broker Connected! Streams running.")
+            log("Broker Connected Successfully! Terminal Unlocked.")
 
             load_fno_symbols()
             threading.Thread(target=background_scanner, daemon=True).start()
@@ -179,33 +178,69 @@ def set_mode():
         return jsonify({"status": "success", "mode": mode})
     return jsonify({"status": "error", "message": "Invalid mode"})
 
-@app.route('/api/manual-scan', methods=['POST'])
-def manual_scan():
-    """Sirf User ke dekhne/backtest karne ke liye - Bot isse order trigger nahi karega"""
+@app.route('/api/manual-5x-scan', methods=['POST'])
+def manual_5x_scan():
+    """Selected Date ke hisab se FnO Cash pool me 5x Volume scan karna (Sirf User ke liye)"""
     if not bot_state["is_logged_in"]:
         return jsonify({"status": "error", "message": "Please connect broker first"})
 
     data = request.json
-    symbol = data.get("symbol", "").upper().strip()
-    interval = data.get("interval", "FIVE_MINUTE")
-    days = int(data.get("days", 2))
+    selected_date = data.get("date")  # Format: YYYY-MM-DD
+    if not selected_date:
+        return jsonify({"status": "error", "message": "Please select a valid date"})
 
-    # Token match check
-    token = None
-    for s in bot_state["fno_stocks"]:
-        if s["symbol"].replace("-EQ", "") == symbol or s["symbol"] == symbol:
-            token = s["token"]
-            symbol = s["symbol"]
-            break
+    try:
+        # Date parse karein
+        target_dt = datetime.datetime.strptime(selected_date, "%Y-%m-%d")
+        from_dt = (target_dt - datetime.timedelta(days=5)).strftime("%Y-%m-%d 09:15")
+        to_dt = target_dt.strftime("%Y-%m-%d 15:30")
+    except Exception as e:
+        return jsonify({"status": "error", "message": "Invalid date format"})
 
-    if not token:
-        return jsonify({"status": "error", "message": f"Stock {symbol} not found in F&O pool"})
+    filtered_results = []
+    # Test/Scan pool F&O stocks
+    stocks_to_scan = bot_state["fno_stocks"] if bot_state["fno_stocks"] else []
+    if not stocks_to_scan:
+        return jsonify({"status": "error", "message": "No stocks available in F&O cache yet"})
 
-    df = fetch_candles(token, interval=interval, days=days)
-    if df is not None and not df.empty:
-        records = df.tail(30).to_dict(orient="records")
-        return jsonify({"status": "success", "symbol": symbol, "data": records})
-    return jsonify({"status": "error", "message": "Could not fetch historical candle data"})
+    for item in stocks_to_scan[:60]:  # Timeout se bachne ke liye fast scan batch
+        time.sleep(0.25)
+        params = {
+            "exchange": "NSE",
+            "symboltoken": str(item["token"]),
+            "interval": "FIVE_MINUTE",
+            "fromdate": from_dt,
+            "todate": to_dt
+        }
+        try:
+            res = bot_state["smart_api"].getCandleData(params)
+            if res and res.get("status") and res.get("data"):
+                df = pd.DataFrame(res["data"], columns=["time", "open", "high", "low", "close", "volume"])
+                df['date_str'] = df['time'].apply(lambda x: str(x).split('T')[0] if 'T' in str(x) else str(x).split(' ')[0])
+                
+                # Check selected date ka 09:15 candle (C1)
+                day_df = df[df['date_str'] == selected_date]
+                if not day_df.empty and len(day_df) >= 1:
+                    c1_idx = day_df.index[0]
+                    if c1_idx >= 20:
+                        prev_20 = df.iloc[c1_idx-20:c1_idx]
+                        avg_vol = prev_20["volume"].mean()
+                        c1_candle = df.iloc[c1_idx]
+                        c1_vol = float(c1_candle["volume"])
+
+                        if avg_vol > 0 and (c1_vol >= 5 * avg_vol):
+                            filtered_results.append({
+                                "symbol": item["symbol"].replace("-EQ", ""),
+                                "c1_high": float(c1_candle["high"]),
+                                "c1_low": float(c1_candle["low"]),
+                                "c1_volume": int(c1_vol),
+                                "avg_volume": int(avg_vol),
+                                "multiplier": round(c1_vol / avg_vol, 2)
+                            })
+        except Exception:
+            continue
+
+    return jsonify({"status": "success", "date": selected_date, "count": len(filtered_results), "results": filtered_results})
 
 @app.route('/api/state', methods=['GET'])
 def get_state():
@@ -249,26 +284,6 @@ def fetch_candles(token, interval="FIVE_MINUTE", days=2):
         pass
     return None
 
-def place_live_order(symbol, token, side, qty):
-    try:
-        order_params = {
-            "variety": "NORMAL",
-            "tradingsymbol": symbol,
-            "symboltoken": str(token),
-            "transactiontype": side,
-            "exchange": "NSE",
-            "ordertype": "MARKET",
-            "producttype": "INTRADAY",
-            "duration": "DAY",
-            "quantity": str(qty)
-        }
-        res = bot_state["smart_api"].placeOrder(order_params)
-        log(f"LIVE ORDER: {side} {qty} {symbol} | Res: {res}")
-        return res
-    except Exception as e:
-        log(f"LIVE ORDER ERROR: {e}")
-        return None
-
 def background_scanner():
     c1_scanned = False
     c2_scanned = False
@@ -281,7 +296,6 @@ def background_scanner():
         now_ist = get_ist_now()
         now_time = now_ist.time()
 
-        # Cutoff Time check (e.g. 10:00, 11:30, 15:30)
         cutoff_parts = [int(x) for x in bot_state["cutoff_time"].split(":")]
         cutoff_dt_time = datetime.time(cutoff_parts[0], cutoff_parts[1])
 
@@ -289,12 +303,11 @@ def background_scanner():
             time.sleep(5)
             continue
 
-        # Max Trades Limit Check
         if bot_state["trades_executed_today"] >= bot_state["max_trades"]:
             time.sleep(5)
             continue
 
-        # 1. 09:20 AM IST - Scan C1 Volume (> 5x of previous 20 candles avg)
+        # 09:20 AM IST - Scan C1 Volume (>= 5x avg)
         if not c1_scanned and now_time >= datetime.time(9, 20, 2):
             log("Scanning 9:15-9:20 AM C1 Volume (>= 5x avg)...")
             candidates = []
@@ -317,16 +330,16 @@ def background_scanner():
                         })
 
             bot_state["c1_candidates"] = candidates
-            log(f"C1 Volume Scan done: {len(candidates)} candidate stocks found.")
+            log(f"C1 Volume Scan complete: {len(candidates)} candidate stocks found.")
             c1_scanned = True
 
-        # 2. 09:25 AM IST - Check C2 and Rules
+        # 09:25 AM IST - Check C2 Rules
         if c1_scanned and not c2_scanned and now_time >= datetime.time(9, 25, 2):
             log("Evaluating C2 Setup Rules...")
 
             for cand in bot_state["c1_candidates"]:
                 if bot_state["trades_executed_today"] >= bot_state["max_trades"]:
-                    log("Max daily trades limit reached.")
+                    log("Daily max trades limit reached.")
                     break
 
                 time.sleep(0.3)
@@ -344,35 +357,31 @@ def background_scanner():
                     trigger_price = 0.0
                     sl = 0.0
 
-                    # --- BUY CONDITION ---
+                    # BUY RULE
                     if c2_high > c1_h:
-                        # C2 high > C1 high
                         if c2_close > c1_h:
-                            # Valid: Close above C1 High -> Entry above C2 High
                             side = "BUY"
                             trigger_price = c2_high
                             sl = c2_low
                         else:
-                            # C2 ne high toda par C1 high ke upar close nahi hua -> INVALID
-                            log(f"{cand['symbol']} BUY Invalid: C2 High broke C1 High but didn't close above it.")
+                            log(f"{cand['symbol']} BUY Invalid: C2 High breached C1 High but close wasn't above it.")
                     elif c2_high <= c1_h and c2_low >= c1_l:
-                        # Inside Bar -> Entry above C1 High, SL = C2 Low
+                        # Inside bar
                         side = "BUY"
                         trigger_price = c1_h
                         sl = c2_low
 
-                    # --- SELL CONDITION (Agar BUY trigger nahi hua) ---
+                    # SELL RULE
                     if not side:
                         if c2_low < c1_l:
                             if c2_close < c1_l:
-                                # Valid: Close below C1 Low -> Entry below C2 Low
                                 side = "SELL"
                                 trigger_price = c2_low
                                 sl = c2_high
                             else:
-                                log(f"{cand['symbol']} SELL Invalid: C2 Low broke C1 Low but didn't close below it.")
+                                log(f"{cand['symbol']} SELL Invalid: C2 Low breached C1 Low but close wasn't below it.")
                         elif c2_high <= c1_h and c2_low >= c1_l:
-                            # Inside Bar -> Entry below C1 Low, SL = C2 High
+                            # Inside bar
                             side = "SELL"
                             trigger_price = c1_l
                             sl = c2_high
@@ -411,10 +420,8 @@ def background_scanner():
         time.sleep(1)
 
 def market_data_monitor():
-    """Live Tracking + 1:2 Half Booking + Trailing SL to Full Target"""
     while bot_state["is_logged_in"]:
         try:
-            # Nifty
             n_res = bot_state["smart_api"].ltpData("NSE", "NIFTY", "99926000")
             if n_res and n_res.get("data"):
                 ltp = float(n_res["data"]["ltp"])
@@ -423,7 +430,6 @@ def market_data_monitor():
                 pchange = round((change / close) * 100, 2) if close > 0 else 0.0
                 bot_state["market_indices"]["NIFTY"] = {"ltp": ltp, "change": change, "pchange": pchange}
 
-            # Sensex
             s_res = bot_state["smart_api"].ltpData("BSE", "SENSEX", "99919000")
             if s_res and s_res.get("data"):
                 ltp = float(s_res["data"]["ltp"])
@@ -434,7 +440,6 @@ def market_data_monitor():
         except Exception:
             pass
 
-        # Manage Open Trades (Trailing & Dynamic Bookings)
         open_trades = [t for t in bot_state["active_trades"] if t["status"] == "OPEN"]
         for trade in open_trades:
             try:
@@ -442,49 +447,40 @@ def market_data_monitor():
                 if ltp_data and ltp_data.get("data"):
                     ltp = float(ltp_data["data"]["ltp"])
                     trade["ltp"] = ltp
-
                     risk_unit = abs(trade["entry"] - trade["orig_sl"])
 
                     if trade["side"] == "BUY":
                         trade["pnl"] = round((ltp - trade["entry"]) * trade["remaining_qty"], 2)
-
-                        # Check 1:2 Milestone for Half Profit Booking & Trail to Cost
+                        # 1:2 Milestone: 50% Qty Book & Trail to Entry
                         if not trade["half_booked"] and ltp >= (trade["entry"] + 2 * risk_unit):
                             half_qty = max(1, trade["remaining_qty"] // 2)
                             trade["remaining_qty"] -= half_qty
                             trade["half_booked"] = True
-                            trade["sl"] = trade["entry"]  # Cost par trail
-                            log(f"1:2 Reached for {trade['symbol']}! Booked 50% qty. SL trailed to entry (₹{trade['entry']}).")
+                            trade["sl"] = trade["entry"]
+                            log(f"1:2 Hit for {trade['symbol']}! Booked 50% qty. SL trailed to entry.")
 
-                        # SL Check
                         if ltp <= trade["sl"]:
                             trade["status"] = "SL / TRAIL HIT"
                             record_trade_history(trade, ltp)
-
-                        # Full Target Check
                         elif ltp >= trade["target"]:
                             trade["status"] = "FULL TARGET HIT"
                             record_trade_history(trade, ltp)
 
-                    else:  # SELL Trade
+                    else:
                         trade["pnl"] = round((trade["entry"] - ltp) * trade["remaining_qty"], 2)
-
-                        # Check 1:2 Milestone for Half Profit Booking
                         if not trade["half_booked"] and ltp <= (trade["entry"] - 2 * risk_unit):
                             half_qty = max(1, trade["remaining_qty"] // 2)
                             trade["remaining_qty"] -= half_qty
                             trade["half_booked"] = True
                             trade["sl"] = trade["entry"]
-                            log(f"1:2 Reached for {trade['symbol']}! Booked 50% qty. SL trailed to entry (₹{trade['entry']}).")
+                            log(f"1:2 Hit for {trade['symbol']}! Booked 50% qty. SL trailed to entry.")
 
                         if ltp >= trade["sl"]:
                             trade["status"] = "SL / TRAIL HIT"
                             record_trade_history(trade, ltp)
-
                         elif ltp <= trade["target"]:
                             trade["status"] = "FULL TARGET HIT"
                             record_trade_history(trade, ltp)
-
             except Exception:
                 pass
             time.sleep(0.1)
