@@ -63,7 +63,8 @@ bot_state = {
     "rr_ratio": saved_conf["rr_ratio"],
     "cutoff_time": saved_conf["cutoff_time"],
     "trades_executed_today": 0,
-    "fno_stocks": [],
+    "fno_stocks": [],              # Poore 180+ F&O stocks with PDH & PDL
+    "is_market_live": False,
     "total_pnl": 0.0,
     "market_indices": {
         "NIFTY": {"ltp": 0.0, "change": 0.0, "pchange": 0.0},
@@ -86,7 +87,7 @@ def log(msg):
     entry = f"[{timestamp} IST] {msg}"
     bot_state["status_log"] = entry
     bot_state["system_logs"].append(entry)
-    if len(bot_state["system_logs"]) > 150:
+    if len(bot_state["system_logs"]) > 200:
         bot_state["system_logs"].pop(0)
     print(entry)
 
@@ -142,12 +143,14 @@ def fetch_daily_pdh_pdl(token):
     return None, None, None
 
 def load_fno_universe():
+    """Angel One official Scrip Master se poore 100% active F&O Cash stocks dynamically fetch karta hai"""
     try:
-        log("Fetching live F&O universe from Angel Master...")
+        log("Downloading Angel One Master & extracting ALL F&O Cash stocks...")
         url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
-        res = requests.get(url, timeout=20)
+        res = requests.get(url, timeout=25)
         master = res.json()
 
+        # Step 1: Saare F&O underlying names extract karo
         fno_names = set()
         for s in master:
             if s.get('exch_seg') == 'NFO' and s.get('instrumenttype') == 'FUTSTK':
@@ -155,6 +158,7 @@ def load_fno_universe():
                 if name:
                     fno_names.add(name.strip())
 
+        # Step 2: Unhi saare symbols ke NSE Cash (-EQ) tokens map karo
         matched_stocks = []
         for s in master:
             if s.get('exch_seg') == 'NSE' and str(s.get('symbol', '')).endswith('-EQ'):
@@ -165,23 +169,25 @@ def load_fno_universe():
                         "token": str(s.get('token'))
                     })
 
+        log(f"Found {len(matched_stocks)} total F&O Cash stocks. Loading PDH & PDL for entire universe...")
+
+        # Step 3: Poore universe ka PDH / PDL calculate karo
         final_list = []
         for item in matched_stocks:
-            time.sleep(0.05)
+            time.sleep(0.04)
             pdh, pdl, prev_close = fetch_daily_pdh_pdl(item["token"])
-            if pdh and pdl:
-                final_list.append({
-                    "symbol": item["symbol"],
-                    "token": item["token"],
-                    "pdh": pdh,
-                    "pdl": pdl,
-                    "prev_close": prev_close or pdl
-                })
+            final_list.append({
+                "symbol": item["symbol"],
+                "token": item["token"],
+                "pdh": pdh or 0.0,
+                "pdl": pdl or 0.0,
+                "prev_close": prev_close or 0.0
+            })
 
         bot_state["fno_stocks"] = final_list
-        log(f"Ready! Loaded {len(bot_state['fno_stocks'])} live FnO stocks.")
+        log(f"SUCCESS: {len(bot_state['fno_stocks'])} total F&O stocks fully loaded and ready!")
     except Exception as e:
-        log(f"Universe fetch error: {e}")
+        log(f"Universe sync error: {e}")
 
 @app.route('/')
 def index():
@@ -199,7 +205,7 @@ def api_login():
             bot_state["smart_api"] = smart_api
             bot_state["feed_token"] = smart_api.getfeedToken()
             bot_state["is_logged_in"] = True
-            log("Broker Connected! Fetching real market feeds...")
+            log("Broker Connected! Engine active.")
 
             threading.Thread(target=load_fno_universe, daemon=True).start()
             threading.Thread(target=background_scanner, daemon=True).start()
@@ -268,8 +274,9 @@ def manual_5x_scan():
         return jsonify({"status": "error", "message": "F&O pool loading, retry in 5 seconds."})
 
     filtered_results = []
-    for item in stocks_to_scan[:50]:
-        time.sleep(0.12)
+    # Scans available F&O stocks
+    for item in stocks_to_scan[:60]:
+        time.sleep(0.1)
         params = {
             "exchange": "NSE",
             "symboltoken": str(item["token"]),
@@ -312,6 +319,7 @@ def get_state():
         "logged_in": bot_state["is_logged_in"],
         "is_logged_in": bot_state["is_logged_in"],
         "broker_connected": bot_state["is_logged_in"],
+        "is_market_live": bot_state["is_market_live"],
         "angel_status": "CONNECTED" if bot_state["is_logged_in"] else "WAITING LOGIN",
         "engine_running": bot_state["engine_running"],
         "trading_mode": bot_state["trading_mode"],
@@ -320,6 +328,7 @@ def get_state():
         "cutoff_time": bot_state["cutoff_time"],
         "risk_amount": bot_state["risk_amount"],
         "trades_executed_today": bot_state["trades_executed_today"],
+        "stocks_loaded_count": len(bot_state["fno_stocks"]),
         "status": bot_state["status_log"],
         "system_logs": bot_state["system_logs"],
         "total_pnl": bot_state["total_pnl"],
@@ -371,13 +380,13 @@ def background_scanner():
             time.sleep(5)
             continue
 
-        # 09:20 AM - C1 Filter
+        # 09:20 AM - C1 Filter on ALL F&O Stocks
         if not c1_scanned and now_time >= datetime.time(9, 20, 2):
-            log("09:20 AM: Scanning C1 for 5x Volume + PDH/PDL Breakout...")
+            log(f"09:20 AM: Scanning ALL {len(bot_state['fno_stocks'])} F&O stocks for 5x Volume + PDH/PDL Breakout...")
             candidates = []
 
             for item in bot_state["fno_stocks"]:
-                time.sleep(0.1)
+                time.sleep(0.08)
                 df = fetch_candles(item["token"])
                 if df is not None and len(df) >= 22:
                     avg_vol = df.iloc[-22:-2]["volume"].mean()
@@ -386,14 +395,14 @@ def background_scanner():
                     c1_close = float(c1_candle["close"])
                     c1_high = float(c1_candle["high"])
                     c1_low = float(c1_candle["low"])
-                    pdh = item["pdh"]
-                    pdl = item["pdl"]
+                    pdh = item.get("pdh", 0)
+                    pdl = item.get("pdl", 0)
 
                     if avg_vol > 0 and (c1_vol >= 5 * avg_vol):
                         bias = None
-                        if c1_close > pdh:
+                        if pdh > 0 and c1_close > pdh:
                             bias = "BULLISH_PDH_BREAKOUT"
-                        elif c1_close < pdl:
+                        elif pdl > 0 and c1_close < pdl:
                             bias = "BEARISH_PDL_BREAKDOWN"
 
                         if bias:
@@ -409,10 +418,10 @@ def background_scanner():
                                 "pdl": pdl,
                                 "ratio": round(c1_vol / avg_vol, 2)
                             })
-                            log(f"Qualified: {item['symbol']} ({round(c1_vol/avg_vol, 2)}x Vol) [{bias}]")
+                            log(f"Setup Qualified: {item['symbol']} ({round(c1_vol/avg_vol, 2)}x Vol) [{bias}]")
 
             bot_state["c1_candidates"] = candidates
-            log(f"C1 Scan Complete: {len(candidates)} candidate(s) found.")
+            log(f"C1 Scan Complete: {len(candidates)} candidate(s) ready for 9:25 AM C2 validation.")
             c1_scanned = True
 
         # 09:25 AM - C2 Confirmation Rules
@@ -505,6 +514,12 @@ def market_data_monitor():
 
     while bot_state["is_logged_in"]:
         now_ts = time.time()
+        now_ist = get_ist_now()
+
+        # Real Market Open/Closed Evaluation
+        is_weekday = (now_ist.weekday() < 5) # Mon-Fri
+        is_time_window = (datetime.time(9, 15) <= now_ist.time() <= datetime.time(15, 30))
+
         try:
             n_res = bot_state["smart_api"].ltpData("NSE", "NIFTY", "99926000")
             if n_res and n_res.get("data"):
@@ -513,6 +528,9 @@ def market_data_monitor():
                 change = round(ltp - close, 2)
                 pchange = round((change / close) * 100, 2) if close > 0 else 0.0
                 bot_state["market_indices"]["NIFTY"] = {"ltp": ltp, "change": change, "pchange": pchange}
+                bot_state["is_market_live"] = (is_weekday and is_time_window)
+            else:
+                bot_state["is_market_live"] = False
 
             s_res = bot_state["smart_api"].ltpData("BSE", "SENSEX", "99919000")
             if s_res and s_res.get("data"):
@@ -522,13 +540,15 @@ def market_data_monitor():
                 pchange = round((change / close) * 100, 2) if close > 0 else 0.0
                 bot_state["market_indices"]["SENSEX"] = {"ltp": ltp, "change": change, "pchange": pchange}
         except Exception:
-            pass
+            bot_state["is_market_live"] = False
 
-        # Real F&O Stock Market Movers
-        if (now_ts - last_stats_check > 15) and bot_state["fno_stocks"]:
+        # Real Market Movers across the dynamic universe (Every 20 seconds)
+        if (now_ts - last_stats_check > 20) and bot_state["fno_stocks"]:
             last_stats_check = now_ts
             stock_perf = []
-            for s in bot_state["fno_stocks"][:40]:
+            # Scans liquid pool dynamically from live loaded stocks
+            scan_universe = bot_state["fno_stocks"][:50]
+            for s in scan_universe:
                 try:
                     res = bot_state["smart_api"].ltpData("NSE", s["symbol"], str(s["token"]))
                     if res and res.get("data"):
@@ -546,6 +566,7 @@ def market_data_monitor():
                             })
                 except Exception:
                     pass
+                time.sleep(0.03)
 
             if len(stock_perf) > 0:
                 df_p = pd.DataFrame(stock_perf)
