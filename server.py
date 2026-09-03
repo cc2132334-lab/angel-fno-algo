@@ -138,7 +138,7 @@ def fetch_daily_pdh_pdl(token):
 
 def load_fno_universe():
     try:
-        log("Auto-detecting F&O Cash stocks from Angel Master...")
+        log("Fetching live F&O universe from Angel Master...")
         url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
         res = requests.get(url, timeout=20)
         master = res.json()
@@ -162,7 +162,7 @@ def load_fno_universe():
 
         final_list = []
         for item in matched_stocks:
-            time.sleep(0.08)
+            time.sleep(0.05)
             pdh, pdl, prev_close = fetch_daily_pdh_pdl(item["token"])
             if pdh and pdl:
                 final_list.append({
@@ -174,7 +174,7 @@ def load_fno_universe():
                 })
 
         bot_state["fno_stocks"] = final_list
-        log(f"Ready! Loaded {len(bot_state['fno_stocks'])} FnO stocks with PDH & PDL.")
+        log(f"Ready! Loaded {len(bot_state['fno_stocks'])} live FnO stocks.")
     except Exception as e:
         log(f"Universe fetch error: {e}")
 
@@ -194,7 +194,7 @@ def api_login():
             bot_state["smart_api"] = smart_api
             bot_state["feed_token"] = smart_api.getfeedToken()
             bot_state["is_logged_in"] = True
-            log("Broker Connected! Engine active.")
+            log("Broker Connected! Fetching real market feeds...")
 
             threading.Thread(target=load_fno_universe, daemon=True).start()
             threading.Thread(target=background_scanner, daemon=True).start()
@@ -264,7 +264,7 @@ def manual_5x_scan():
 
     filtered_results = []
     for item in stocks_to_scan[:50]:
-        time.sleep(0.18)
+        time.sleep(0.12)
         params = {
             "exchange": "NSE",
             "symboltoken": str(item["token"]),
@@ -371,7 +371,7 @@ def background_scanner():
             candidates = []
 
             for item in bot_state["fno_stocks"]:
-                time.sleep(0.12)
+                time.sleep(0.1)
                 df = fetch_candles(item["token"])
                 if df is not None and len(df) >= 22:
                     avg_vol = df.iloc[-22:-2]["volume"].mean()
@@ -417,7 +417,7 @@ def background_scanner():
                 if bot_state["trades_executed_today"] >= bot_state["max_trades"]:
                     break
 
-                time.sleep(0.2)
+                time.sleep(0.15)
                 df = fetch_candles(cand["token"])
                 if df is not None and len(df) >= 2:
                     c2 = df.iloc[-1]
@@ -518,28 +518,31 @@ def market_data_monitor():
         except Exception:
             pass
 
-        # Top Gainers, Losers, Volume Buzzers
-        if now_ts - last_stats_check > 20 and bot_state["fno_stocks"]:
+        # Real F&O Stock Market Movers (NO DUMMY DATA)
+        if (now_ts - last_stats_check > 15) and bot_state["fno_stocks"]:
             last_stats_check = now_ts
             stock_perf = []
-            for s in bot_state["fno_stocks"][:35]:
+            
+            for s in bot_state["fno_stocks"][:40]:
                 try:
                     res = bot_state["smart_api"].ltpData("NSE", s["symbol"], str(s["token"]))
                     if res and res.get("data"):
                         d = res["data"]
                         ltp = float(d["ltp"])
                         close = float(s.get("prev_close") or d.get("close", ltp))
-                        pchange = round(((ltp - close) / close) * 100, 2) if close > 0 else 0.0
-                        vol = int(d.get("trade_volume", 0) or 0)
-                        stock_perf.append({
-                            "symbol": s["symbol"].replace("-EQ", ""),
-                            "ltp": ltp,
-                            "pchange": pchange,
-                            "volume": vol
-                        })
+                        if close > 0 and ltp > 0:
+                            pchange = round(((ltp - close) / close) * 100, 2)
+                            vol = int(d.get("trade_volume", 0) or 0)
+                            stock_perf.append({
+                                "symbol": s["symbol"].replace("-EQ", ""),
+                                "ltp": ltp,
+                                "pchange": pchange,
+                                "volume": vol
+                            })
                 except Exception:
                     pass
-            if stock_perf:
+
+            if len(stock_perf) > 0:
                 df_p = pd.DataFrame(stock_perf)
                 bot_state["market_stats"]["top_gainers"] = df_p.sort_values(by="pchange", ascending=False).head(5).to_dict('records')
                 bot_state["market_stats"]["top_losers"] = df_p.sort_values(by="pchange", ascending=True).head(5).to_dict('records')
