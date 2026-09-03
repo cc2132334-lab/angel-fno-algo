@@ -69,14 +69,15 @@ bot_state = {
         "NIFTY": {"ltp": 0.0, "change": 0.0, "pchange": 0.0},
         "SENSEX": {"ltp": 0.0, "change": 0.0, "pchange": 0.0}
     },
-    "market_movers": {
-        "gainers": [],
-        "losers": []
+    "market_stats": {
+        "top_gainers": [],
+        "top_losers": [],
+        "volume_buzzers": []
     },
     "c1_candidates": [],
     "active_trades": [],
     "trade_history": [],
-    "status_log": "Terminal Ready. Waiting for Angel One Login."
+    "status_log": "Terminal Ready. Please connect broker."
 }
 
 def log(msg):
@@ -137,7 +138,7 @@ def fetch_daily_pdh_pdl(token):
 
 def load_fno_universe():
     try:
-        log("Auto-detecting all active F&O Cash stocks from Angel Master...")
+        log("Auto-detecting F&O Cash stocks from Angel Master...")
         url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
         res = requests.get(url, timeout=20)
         master = res.json()
@@ -156,11 +157,8 @@ def load_fno_universe():
                 if sym_clean in fno_names:
                     matched_stocks.append({
                         "symbol": s.get('symbol'),
-                        "name": sym_clean,
                         "token": str(s.get('token'))
                     })
-
-        log(f"Found {len(matched_stocks)} active F&O Cash stocks. Fetching PDH & PDL...")
 
         final_list = []
         for item in matched_stocks:
@@ -178,7 +176,7 @@ def load_fno_universe():
         bot_state["fno_stocks"] = final_list
         log(f"Ready! Loaded {len(bot_state['fno_stocks'])} FnO stocks with PDH & PDL.")
     except Exception as e:
-        log(f"Error loading universe: {e}")
+        log(f"Universe fetch error: {e}")
 
 @app.route('/')
 def index():
@@ -196,7 +194,7 @@ def api_login():
             bot_state["smart_api"] = smart_api
             bot_state["feed_token"] = smart_api.getfeedToken()
             bot_state["is_logged_in"] = True
-            log("Broker Connected! Engine initialized.")
+            log("Broker Connected! Engine active.")
 
             threading.Thread(target=load_fno_universe, daemon=True).start()
             threading.Thread(target=background_scanner, daemon=True).start()
@@ -220,7 +218,7 @@ def update_settings():
     if "risk_amount" in data:
         bot_state["risk_amount"] = int(data["risk_amount"])
     save_config()
-    log("Settings updated successfully.")
+    log("Settings updated.")
     return jsonify({"status": "success"})
 
 @app.route('/api/toggle-engine', methods=['POST'])
@@ -243,6 +241,66 @@ def set_mode():
         return jsonify({"status": "success", "mode": mode})
     return jsonify({"status": "error"})
 
+@app.route('/api/manual-5x-scan', methods=['POST'])
+def manual_5x_scan():
+    if not bot_state.get("smart_api"):
+        return jsonify({"status": "error", "message": "Please connect broker first"})
+
+    data = request.get_json(force=True) or {}
+    selected_date = data.get("date")
+    if not selected_date:
+        return jsonify({"status": "error", "message": "Please select a date"})
+
+    try:
+        target_dt = datetime.datetime.strptime(selected_date, "%Y-%m-%d")
+        from_dt = (target_dt - datetime.timedelta(days=7)).strftime("%Y-%m-%d 09:15")
+        to_dt = target_dt.strftime("%Y-%m-%d 15:30")
+    except Exception:
+        return jsonify({"status": "error", "message": "Invalid date format"})
+
+    stocks_to_scan = bot_state["fno_stocks"]
+    if not stocks_to_scan:
+        return jsonify({"status": "error", "message": "F&O pool loading, retry in 5 seconds."})
+
+    filtered_results = []
+    for item in stocks_to_scan[:50]:
+        time.sleep(0.18)
+        params = {
+            "exchange": "NSE",
+            "symboltoken": str(item["token"]),
+            "interval": "FIVE_MINUTE",
+            "fromdate": from_dt,
+            "todate": to_dt
+        }
+        try:
+            res = bot_state["smart_api"].getCandleData(params)
+            if res and res.get("status") and res.get("data"):
+                df = pd.DataFrame(res["data"], columns=["time", "open", "high", "low", "close", "volume"])
+                df['date_str'] = df['time'].apply(lambda x: str(x).split('T')[0] if 'T' in str(x) else str(x).split(' ')[0])
+                
+                day_df = df[df['date_str'] == selected_date]
+                if not day_df.empty and len(day_df) >= 1:
+                    c1_idx = day_df.index[0]
+                    if c1_idx >= 20:
+                        prev_20 = df.iloc[c1_idx-20:c1_idx]
+                        avg_vol = prev_20["volume"].mean()
+                        c1_candle = df.iloc[c1_idx]
+                        c1_vol = float(c1_candle["volume"])
+
+                        if avg_vol > 0 and (c1_vol >= 5 * avg_vol):
+                            filtered_results.append({
+                                "symbol": item["symbol"].replace("-EQ", ""),
+                                "c1_high": float(c1_candle["high"]),
+                                "c1_low": float(c1_candle["low"]),
+                                "c1_volume": int(c1_vol),
+                                "avg_volume": int(avg_vol),
+                                "multiplier": round(c1_vol / avg_vol, 2)
+                            })
+        except Exception:
+            continue
+
+    return jsonify({"status": "success", "date": selected_date, "count": len(filtered_results), "results": filtered_results})
+
 @app.route('/api/state', methods=['GET'])
 def get_state():
     return jsonify({
@@ -257,11 +315,10 @@ def get_state():
         "cutoff_time": bot_state["cutoff_time"],
         "risk_amount": bot_state["risk_amount"],
         "trades_executed_today": bot_state["trades_executed_today"],
-        "stocks_loaded_count": len(bot_state["fno_stocks"]),
         "status": bot_state["status_log"],
         "total_pnl": bot_state["total_pnl"],
         "market_indices": bot_state["market_indices"],
-        "market_movers": bot_state["market_movers"],
+        "market_stats": bot_state["market_stats"],
         "c1_candidates": bot_state["c1_candidates"],
         "active_trades": bot_state["active_trades"],
         "trade_history": bot_state["trade_history"]
@@ -281,10 +338,10 @@ def place_live_order(symbol, token, side, qty):
             "quantity": str(qty)
         }
         res = bot_state["smart_api"].placeOrder(order_params)
-        log(f"LIVE ORDER SENT: {side} {qty} {symbol} | Res: {res}")
+        log(f"LIVE ORDER: {side} {qty} {symbol} | Res: {res}")
         return res
     except Exception as e:
-        log(f"LIVE ORDER FAILED: {e}")
+        log(f"LIVE ORDER ERROR: {e}")
         return None
 
 def background_scanner():
@@ -308,9 +365,9 @@ def background_scanner():
             time.sleep(5)
             continue
 
-        # 09:20 AM - C1 Filter (>= 5x Volume AND Close > PDH ya Close < PDL)
+        # 09:20 AM - C1 Filter
         if not c1_scanned and now_time >= datetime.time(9, 20, 2):
-            log("09:20 AM: Scanning C1 for 5x Volume AND PDH/PDL Breakout...")
+            log("09:20 AM: Scanning C1 for 5x Volume + PDH/PDL Breakout...")
             candidates = []
 
             for item in bot_state["fno_stocks"]:
@@ -349,16 +406,15 @@ def background_scanner():
                             log(f"Qualified: {item['symbol']} ({round(c1_vol/avg_vol, 2)}x Vol) [{bias}]")
 
             bot_state["c1_candidates"] = candidates
-            log(f"C1 Scan Complete: {len(candidates)} candidate(s) ready for C2 validation.")
+            log(f"C1 Scan Complete: {len(candidates)} candidate(s) found.")
             c1_scanned = True
 
-        # 09:25 AM - C2 Confirmation Rules & Auto Execution
+        # 09:25 AM - C2 Confirmation Rules
         if c1_scanned and not c2_scanned and now_time >= datetime.time(9, 25, 2):
             log("09:25 AM: Validating C2 Setup and Triggering Orders...")
 
             for cand in bot_state["c1_candidates"]:
                 if bot_state["trades_executed_today"] >= bot_state["max_trades"]:
-                    log("Daily max trades limit reached.")
                     break
 
                 time.sleep(0.2)
@@ -382,8 +438,6 @@ def background_scanner():
                                 side = "BUY"
                                 trigger_price = c2_high
                                 sl = c2_low
-                            else:
-                                log(f"{cand['symbol']} Invalid: C2 broke High but didn't close above.")
                         elif c2_high <= c1_h and c2_low >= c1_l:
                             side = "BUY"
                             trigger_price = c1_h
@@ -395,8 +449,6 @@ def background_scanner():
                                 side = "SELL"
                                 trigger_price = c2_low
                                 sl = c2_high
-                            else:
-                                log(f"{cand['symbol']} Invalid: C2 broke Low but didn't close below.")
                         elif c2_high <= c1_h and c2_low >= c1_l:
                             side = "SELL"
                             trigger_price = c1_l
@@ -436,14 +488,14 @@ def background_scanner():
                             "time": get_ist_now().strftime("%H:%M:%S")
                         })
                         bot_state["trades_executed_today"] += 1
-                        log(f"Trade Entered [{mode}]: {side} {cand['symbol']} Qty:{qty} Entry:{trigger_price} SL:{sl} Target:{final_target}")
+                        log(f"Trade Entered [{mode}]: {side} {cand['symbol']} Qty:{qty} SL:{sl} Target:{final_target}")
 
             c2_scanned = True
 
         time.sleep(1)
 
 def market_data_monitor():
-    last_movers_check = 0
+    last_stats_check = 0
 
     while bot_state["is_logged_in"]:
         now_ts = time.time()
@@ -466,31 +518,34 @@ def market_data_monitor():
         except Exception:
             pass
 
-        # Calculate Market Movers every 15 seconds
-        if now_ts - last_movers_check > 15 and bot_state["fno_stocks"]:
-            last_movers_check = now_ts
-            movers_data = []
-            sample_stocks = bot_state["fno_stocks"][:30]
-            for st in sample_stocks:
+        # Top Gainers, Losers, Volume Buzzers
+        if now_ts - last_stats_check > 20 and bot_state["fno_stocks"]:
+            last_stats_check = now_ts
+            stock_perf = []
+            for s in bot_state["fno_stocks"][:35]:
                 try:
-                    res = bot_state["smart_api"].ltpData("NSE", st["symbol"], str(st["token"]))
+                    res = bot_state["smart_api"].ltpData("NSE", s["symbol"], str(s["token"]))
                     if res and res.get("data"):
-                        ltp = float(res["data"]["ltp"])
-                        close = float(st.get("prev_close") or ltp)
-                        p_chg = round(((ltp - close) / close) * 100, 2) if close > 0 else 0.0
-                        movers_data.append({
-                            "symbol": st["symbol"].replace("-EQ", ""),
+                        d = res["data"]
+                        ltp = float(d["ltp"])
+                        close = float(s.get("prev_close") or d.get("close", ltp))
+                        pchange = round(((ltp - close) / close) * 100, 2) if close > 0 else 0.0
+                        vol = int(d.get("trade_volume", 0) or 0)
+                        stock_perf.append({
+                            "symbol": s["symbol"].replace("-EQ", ""),
                             "ltp": ltp,
-                            "pchange": p_chg
+                            "pchange": pchange,
+                            "volume": vol
                         })
                 except Exception:
                     pass
-            if movers_data:
-                sorted_movers = sorted(movers_data, key=lambda x: x["pchange"], reverse=True)
-                bot_state["market_movers"]["gainers"] = sorted_movers[:5]
-                bot_state["market_movers"]["losers"] = sorted(movers_data, key=lambda x: x["pchange"])[:5]
+            if stock_perf:
+                df_p = pd.DataFrame(stock_perf)
+                bot_state["market_stats"]["top_gainers"] = df_p.sort_values(by="pchange", ascending=False).head(5).to_dict('records')
+                bot_state["market_stats"]["top_losers"] = df_p.sort_values(by="pchange", ascending=True).head(5).to_dict('records')
+                bot_state["market_stats"]["volume_buzzers"] = df_p.sort_values(by="volume", ascending=False).head(5).to_dict('records')
 
-        # Monitor Active Positions: 1:2 Half Booking & Trailing
+        # Active Positions Trailing
         open_trades = [t for t in bot_state["active_trades"] if t["status"] == "OPEN"]
         for trade in open_trades:
             try:
@@ -502,7 +557,6 @@ def market_data_monitor():
 
                     if trade["side"] == "BUY":
                         trade["pnl"] = round((ltp - trade["entry"]) * trade["remaining_qty"], 2)
-
                         if not trade["half_booked"] and ltp >= (trade["entry"] + 2 * risk_unit):
                             half_qty = max(1, trade["remaining_qty"] // 2)
                             trade["remaining_qty"] -= half_qty
@@ -523,7 +577,6 @@ def market_data_monitor():
 
                     else:
                         trade["pnl"] = round((trade["entry"] - ltp) * trade["remaining_qty"], 2)
-
                         if not trade["half_booked"] and ltp <= (trade["entry"] - 2 * risk_unit):
                             half_qty = max(1, trade["remaining_qty"] // 2)
                             trade["remaining_qty"] -= half_qty
@@ -536,7 +589,7 @@ def market_data_monitor():
                             if trade["mode"] == "LIVE":
                                 place_live_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
                             record_trade_history(trade, ltp)
-                        elif ltp >= trade["target"]:
+                        elif ltp <= trade["target"]:
                             trade["status"] = "FULL TARGET HIT"
                             if trade["mode"] == "LIVE":
                                 place_live_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
