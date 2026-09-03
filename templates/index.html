@@ -62,6 +62,7 @@
         .down-text { color: var(--down); }
         .tag-buy { color: var(--up); background: rgba(34, 197, 94, 0.15); padding: 2px 6px; border-radius: 4px; font-weight: bold; }
         .tag-sell { color: var(--down); background: rgba(239, 68, 68, 0.15); padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+        .highlight-vol { background: rgba(56, 189, 248, 0.2); color: var(--accent); padding: 2px 6px; border-radius: 4px; font-weight: bold; }
     </style>
 </head>
 <body data-theme="dark">
@@ -71,152 +72,172 @@
         <button class="theme-btn" onclick="toggleTheme()" id="theme-btn">☀️ Light Mode</button>
     </div>
 
-    <div class="ticker-bar">
-        <div class="ticker-box">
-            <div class="ticker-name">NIFTY 50</div>
-            <div class="ticker-val" id="nifty-spot">--</div>
-            <div class="ticker-chg" id="nifty-chg">0.00 (0.00%)</div>
-        </div>
-        <div class="ticker-box">
-            <div class="ticker-name">SENSEX</div>
-            <div class="ticker-val" id="sensex-spot">--</div>
-            <div class="ticker-chg" id="sensex-chg">0.00 (0.00%)</div>
-        </div>
-    </div>
-
-    <div class="status-box" id="system-status">Terminal Initializing...</div>
-
-    <div class="card" style="border-left: 4px solid #f59e0b;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-            <div>
-                <span style="font-size: 0.72rem; color: var(--text-muted);">REALIZED TODAY'S P&L</span>
-                <div id="pnl-display" style="font-size: 1.3rem; font-weight: bold; color: var(--text-muted);">₹0.00</div>
-            </div>
-            <div id="mode-badge" style="font-size: 0.75rem; font-weight: bold; color: var(--accent);">SIMULATION MODE</div>
-        </div>
-        <div style="display: flex; gap: 8px; margin-bottom: 10px;">
-            <button id="btn-paper" onclick="switchMode('PAPER')" style="flex: 1; background: #0284c7; color: white;">📝 Paper Mode</button>
-            <button id="btn-live" onclick="switchMode('LIVE')" style="flex: 1; background: var(--border); color: var(--text-muted);">🔴 Live Mode</button>
-        </div>
-        <button id="btn-engine" onclick="toggleEngine()" style="background: #16a34a; color: white;">🟢 ENGINE RUNNING (Click to Pause)</button>
-    </div>
-
-    <div class="card">
-        <h2>⚙️ Bot Configuration & Limits</h2>
-        
-        <div class="grid-2">
-            <div>
-                <label style="font-size: 0.75rem; color: var(--text-muted);">Max Trades Per Day</label>
-                <select id="max-trades" onchange="syncSettings()">
-                    <option value="1">1 Trade</option>
-                    <option value="2">2 Trades</option>
-                    <option value="3" selected>3 Trades</option>
-                    <option value="5">5 Trades</option>
-                    <option value="10">10 Trades</option>
-                </select>
-            </div>
-            <div>
-                <label style="font-size: 0.75rem; color: var(--text-muted);">Cutoff Time Window</label>
-                <select id="cutoff-time" onchange="syncSettings()">
-                    <option value="10:00">Till 10:00 AM</option>
-                    <option value="10:30">Till 10:30 AM</option>
-                    <option value="11:00">Till 11:00 AM</option>
-                    <option value="11:30">Till 11:30 AM</option>
-                    <option value="12:00">Till 12:00 PM</option>
-                    <option value="13:00">Till 01:00 PM</option>
-                    <option value="14:00">Till 02:00 PM</option>
-                    <option value="15:00" selected>Till 03:00 PM</option>
-                    <option value="15:30">Till 03:30 PM (Close)</option>
-                </select>
-            </div>
-        </div>
-
-        <div style="margin-top: 10px;">
-            <div style="display: flex; justify-content: space-between;">
-                <label style="font-size: 0.75rem; color: var(--text-muted);">Target Book Ratio (Trail from 1:2):</label>
-                <span id="rr-label" style="font-weight: bold; color: var(--accent);">1:3</span>
-            </div>
-            <input type="range" id="rr-slider" min="1" max="10" step="1" value="3" oninput="updateRR(this.value)" onchange="syncSettings()">
-        </div>
-
-        <div style="margin-top: 10px;">
-            <div style="display: flex; justify-content: space-between;">
-                <label style="font-size: 0.75rem; color: var(--text-muted);">Risk Per Signal:</label>
-                <span id="risk-label" style="font-weight: bold; color: var(--up);">₹500</span>
-            </div>
-            <input type="range" id="risk-slider" min="50" max="5000" step="50" value="500" oninput="updateRisk(this.value)" onchange="syncSettings()">
-        </div>
-    </div>
-
-    <div class="card">
-        <h2>🔍 Manual Scanner / Backtest Data (User Only)</h2>
-        <div class="grid-2">
-            <input type="text" id="manual-sym" placeholder="Symbol (e.g. RELIANCE)" style="margin-top:0;">
-            <select id="manual-days" style="margin-top:0;">
-                <option value="1">1 Day</option>
-                <option value="2" selected>2 Days</option>
-                <option value="5">5 Days</option>
-            </select>
-        </div>
-        <button onclick="runManualScan()" style="background: var(--accent); color: white; margin-top: 8px;">Fetch Candle Data</button>
-        
-        <div id="manual-data-view" style="margin-top: 10px; max-height: 180px; overflow-y: auto; display: none;">
-            <table>
-                <thead>
-                    <tr><th>Time</th><th>Open</th><th>High</th><th>Low</th><th>Close</th><th>Vol</th></tr>
-                </thead>
-                <tbody id="manual-data-body"></tbody>
-            </table>
-        </div>
-    </div>
-
-    <div class="card" id="login-card">
-        <h2>Broker Login (Angel One)</h2>
+    <div class="card" id="login-card" style="border: 2px solid var(--accent); padding: 20px;">
+        <h2 style="font-size: 1.1rem; margin-bottom: 12px; text-align: center;">🔐 Connect Angel One Broker</h2>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px; text-align: center;">Terminal ko access karne ke liye broker connect karein.</p>
         <input type="text" id="api_key" placeholder="SmartAPI Key">
         <input type="text" id="client_code" placeholder="Client ID">
         <input type="password" id="pin" placeholder="MPIN">
-        <input type="password" id="totp_secret" placeholder="TOTP Secret">
-        <button style="background: var(--accent); color: white;" onclick="login()">Connect Broker</button>
+        <input type="password" id="totp_secret" placeholder="TOTP Secret Key">
+        <button id="login-btn" style="background: var(--accent); color: white; margin-top: 14px; padding: 12px;" onclick="login()">Connect Broker & Unlock Terminal</button>
     </div>
 
-    <div class="card">
-        <h2>📊 Market Heat & Movers</h2>
-        <div class="tabs">
-            <button class="tab-btn active" onclick="switchStatsTab('gainers', this)">🚀 Top Gainers</button>
-            <button class="tab-btn" onclick="switchStatsTab('losers', this)">🔻 Top Losers</button>
-            <button class="tab-btn" onclick="switchStatsTab('volume', this)">🔥 Volume Buzzers</button>
-        </div>
-        <table>
-            <thead><tr><th>Symbol</th><th>LTP</th><th>% Change</th></tr></thead>
-            <tbody id="stats-body"><tr><td colspan="3" style="text-align:center; color: var(--text-muted);">Loading live market stats...</td></tr></tbody>
-        </table>
-    </div>
-
-    <div class="card">
-        <div class="tabs">
-            <button class="tab-btn active" onclick="switchTradesTab('active', this)">⚡ Active Positions</button>
-            <button class="tab-btn" onclick="switchTradesTab('history', this)">📜 Trade History</button>
+    <div id="main-terminal" style="display: none;">
+        
+        <div class="ticker-bar">
+            <div class="ticker-box">
+                <div class="ticker-name">NIFTY 50</div>
+                <div class="ticker-val" id="nifty-spot">--</div>
+                <div class="ticker-chg" id="nifty-chg">0.00 (0.00%)</div>
+            </div>
+            <div class="ticker-box">
+                <div class="ticker-name">SENSEX</div>
+                <div class="ticker-val" id="sensex-spot">--</div>
+                <div class="ticker-chg" id="sensex-chg">0.00 (0.00%)</div>
+            </div>
         </div>
 
-        <div id="active-view">
+        <div class="status-box" id="system-status">Terminal Active.</div>
+
+        <div class="card" style="border-left: 4px solid #f59e0b;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <div>
+                    <span style="font-size: 0.72rem; color: var(--text-muted);">REALIZED TODAY'S P&L</span>
+                    <div id="pnl-display" style="font-size: 1.3rem; font-weight: bold; color: var(--text-muted);">₹0.00</div>
+                </div>
+                <div id="mode-badge" style="font-size: 0.75rem; font-weight: bold; color: var(--accent);">SIMULATION MODE</div>
+            </div>
+            <div style="display: flex; gap: 8px; margin-bottom: 10px;">
+                <button id="btn-paper" onclick="switchMode('PAPER')" style="flex: 1; background: #0284c7; color: white;">📝 Paper Mode</button>
+                <button id="btn-live" onclick="switchMode('LIVE')" style="flex: 1; background: var(--border); color: var(--text-muted);">🔴 Live Mode</button>
+            </div>
+            <button id="btn-engine" onclick="toggleEngine()" style="background: #16a34a; color: white;">🟢 ENGINE RUNNING (Click to Pause)</button>
+        </div>
+
+        <div class="card">
+            <h2>⚙️ Bot Configuration & Limits</h2>
+            
+            <div class="grid-2">
+                <div>
+                    <label style="font-size: 0.75rem; color: var(--text-muted);">Max Trades Per Day</label>
+                    <select id="max-trades" onchange="syncSettings()">
+                        <option value="1">1 Trade</option>
+                        <option value="2">2 Trades</option>
+                        <option value="3" selected>3 Trades</option>
+                        <option value="5">5 Trades</option>
+                        <option value="10">10 Trades</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="font-size: 0.75rem; color: var(--text-muted);">Cutoff Time Window</label>
+                    <select id="cutoff-time" onchange="syncSettings()">
+                        <option value="10:00">Till 10:00 AM</option>
+                        <option value="10:30">Till 10:30 AM</option>
+                        <option value="11:00">Till 11:00 AM</option>
+                        <option value="11:30">Till 11:30 AM</option>
+                        <option value="12:00">Till 12:00 PM</option>
+                        <option value="13:00">Till 01:00 PM</option>
+                        <option value="14:00">Till 02:00 PM</option>
+                        <option value="15:00" selected>Till 03:00 PM</option>
+                        <option value="15:30">Till 03:30 PM (Close)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div style="margin-top: 10px;">
+                <div style="display: flex; justify-content: space-between;">
+                    <label style="font-size: 0.75rem; color: var(--text-muted);">Target Book Ratio (Trail from 1:2):</label>
+                    <span id="rr-label" style="font-weight: bold; color: var(--accent);">1:3</span>
+                </div>
+                <input type="range" id="rr-slider" min="1" max="10" step="1" value="3" oninput="updateRR(this.value)" onchange="syncSettings()">
+            </div>
+
+            <div style="margin-top: 10px;">
+                <div style="display: flex; justify-content: space-between;">
+                    <label style="font-size: 0.75rem; color: var(--text-muted);">Risk Per Signal:</label>
+                    <span id="risk-label" style="font-weight: bold; color: var(--up);">₹500</span>
+                </div>
+                <input type="range" id="risk-slider" min="50" max="5000" step="50" value="500" oninput="updateRisk(this.value)" onchange="syncSettings()">
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>🔍 Manual 5x Volume Scanner (F&O Cash Only)</h2>
+            <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 8px;">Date select karke 9:15-9:20 AM C1 candle ka 5x Volume breakout scan karein.</p>
+            
+            <div class="grid-2">
+                <div>
+                    <label style="font-size: 0.72rem; color: var(--text-muted);">Select Date for Analysis</label>
+                    <input type="date" id="scan-date">
+                </div>
+                <div style="display: flex; align-items: flex-end;">
+                    <button onclick="runManual5xScan()" id="btn-scan" style="background: var(--accent); color: white;">🚀 Scan 5x Volume</button>
+                </div>
+            </div>
+            
+            <div id="manual-scan-results" style="margin-top: 12px; display: none;">
+                <div id="scan-summary" style="font-size: 0.78rem; font-weight: bold; margin-bottom: 6px; color: var(--accent);"></div>
+                <div style="max-height: 220px; overflow-y: auto;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>C1 High</th>
+                                <th>C1 Low</th>
+                                <th>C1 Volume</th>
+                                <th>Avg Vol</th>
+                                <th>Burst</th>
+                            </tr>
+                        </thead>
+                        <tbody id="manual-scan-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>📊 Market Movers</h2>
+            <div class="tabs">
+                <button class="tab-btn active" onclick="switchStatsTab('gainers', this)">🚀 Top Gainers</button>
+                <button class="tab-btn" onclick="switchStatsTab('losers', this)">🔻 Top Losers</button>
+                <button class="tab-btn" onclick="switchStatsTab('volume', this)">🔥 Volume Buzzers</button>
+            </div>
             <table>
-                <thead><tr><th>Symbol</th><th>Side</th><th>Entry</th><th>SL</th><th>Qty</th><th>P&L</th><th>Status</th></tr></thead>
-                <tbody id="active-body"><tr><td colspan="7" style="text-align:center; color: var(--text-muted);">No open positions</td></tr></tbody>
+                <thead><tr><th>Symbol</th><th>LTP</th><th>% Change</th></tr></thead>
+                <tbody id="stats-body"><tr><td colspan="3" style="text-align:center; color: var(--text-muted);">Loading live market stats...</td></tr></tbody>
             </table>
         </div>
 
-        <div id="history-view" style="display: none;">
-            <table>
-                <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Entry → Exit</th><th>P&L</th><th>Result</th></tr></thead>
-                <tbody id="history-body"><tr><td colspan="6" style="text-align:center; color: var(--text-muted);">No closed trades yet</td></tr></tbody>
-            </table>
+        <div class="card">
+            <div class="tabs">
+                <button class="tab-btn active" onclick="switchTradesTab('active', this)">⚡ Active Positions</button>
+                <button class="tab-btn" onclick="switchTradesTab('history', this)">📜 Trade History</button>
+            </div>
+
+            <div id="active-view">
+                <table>
+                    <thead><tr><th>Symbol</th><th>Side</th><th>Entry</th><th>SL</th><th>Qty</th><th>P&L</th><th>Status</th></tr></thead>
+                    <tbody id="active-body"><tr><td colspan="7" style="text-align:center; color: var(--text-muted);">No open positions</td></tr></tbody>
+                </table>
+            </div>
+
+            <div id="history-view" style="display: none;">
+                <table>
+                    <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Entry → Exit</th><th>P&L</th><th>Result</th></tr></thead>
+                    <tbody id="history-body"><tr><td colspan="6" style="text-align:center; color: var(--text-muted);">No closed trades yet</td></tr></tbody>
+                </table>
+            </div>
         </div>
+
     </div>
 
     <script>
         let currentStatsTab = 'gainers';
         let isEngineRunning = true;
         let cachedState = null;
+
+        // Set default date picker to today
+        document.getElementById('scan-date').value = new Date().toISOString().split('T')[0];
 
         function toggleTheme() {
             const body = document.body;
@@ -247,24 +268,45 @@
             });
         }
 
-        async function runManualScan() {
-            const sym = document.getElementById('manual-sym').value;
-            const days = document.getElementById('manual-days').value;
-            if(!sym) return alert("Please enter symbol name (e.g. RELIANCE)");
+        async function runManual5xScan() {
+            const dateVal = document.getElementById('scan-date').value;
+            if(!dateVal) return alert("Please select a date first");
 
-            const res = await fetch('/api/manual-scan', {
+            const scanBtn = document.getElementById('btn-scan');
+            scanBtn.innerText = "Scanning F&O Cash...";
+            scanBtn.disabled = true;
+
+            const res = await fetch('/api/manual-5x-scan', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({symbol: sym, days: days})
+                body: JSON.stringify({date: dateVal})
             });
             const data = await res.json();
+            scanBtn.innerText = "🚀 Scan 5x Volume";
+            scanBtn.disabled = false;
+
             if(data.status === 'success') {
-                document.getElementById('manual-data-view').style.display = 'block';
+                const container = document.getElementById('manual-scan-results');
+                container.style.display = 'block';
+                document.getElementById('scan-summary').innerText = `Date: ${data.date} | Found: ${data.count} stocks with >= 5x Volume in C1`;
+
+                if(data.results.length === 0) {
+                    document.getElementById('manual-scan-body').innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No stock met >= 5x C1 volume criteria on this date</td></tr>`;
+                    return;
+                }
+
                 let html = '';
-                data.data.reverse().forEach(c => {
-                    html += `<tr><td>${c.time.split(' ')[1]}</td><td>${c.open}</td><td>${c.high}</td><td>${c.low}</td><td>${c.close}</td><td>${c.volume}</td></tr>`;
+                data.results.forEach(r => {
+                    html += `<tr>
+                        <td><b>${r.symbol}</b></td>
+                        <td>₹${r.c1_high}</td>
+                        <td>₹${r.c1_low}</td>
+                        <td>${r.c1_volume.toLocaleString()}</td>
+                        <td>${r.avg_volume.toLocaleString()}</td>
+                        <td><span class="highlight-vol">${r.multiplier}x</span></td>
+                    </tr>`;
                 });
-                document.getElementById('manual-data-body').innerHTML = html;
+                document.getElementById('manual-scan-body').innerHTML = html;
             } else {
                 alert(data.message);
             }
@@ -277,15 +319,25 @@
                 pin: document.getElementById('pin').value,
                 totp_secret: document.getElementById('totp_secret').value
             };
-            document.getElementById('system-status').innerText = "Connecting broker...";
+            const btn = document.getElementById('login-btn');
+            btn.innerText = "Verifying Credentials...";
+            btn.disabled = true;
+
             const res = await fetch('/api/login', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(payload)
             });
             const data = await res.json();
-            alert(data.message);
-            if(data.status === 'success') document.getElementById('login-card').style.display = 'none';
+            btn.innerText = "Connect Broker & Unlock Terminal";
+            btn.disabled = false;
+
+            if(data.status === 'success') {
+                document.getElementById('login-card').style.display = 'none';
+                document.getElementById('main-terminal').style.display = 'block';
+            } else {
+                alert("Login Error: " + data.message);
+            }
         }
 
         async function toggleEngine() {
@@ -386,8 +438,12 @@
                 const data = await res.json();
                 cachedState = data;
 
+                if(data.logged_in) {
+                    document.getElementById('login-card').style.display = 'none';
+                    document.getElementById('main-terminal').style.display = 'block';
+                }
+
                 document.getElementById('system-status').innerText = data.status;
-                if(data.logged_in) document.getElementById('login-card').style.display = 'none';
 
                 isEngineRunning = data.engine_running;
                 updateEngineButtonUI(data.engine_running);
@@ -420,7 +476,7 @@
                 renderStats();
 
                 // Open Trades
-                if(data.active_trades.length > 0) {
+                if(data.active_trades && data.active_trades.length > 0) {
                     let html = '';
                     data.active_trades.forEach(t => {
                         const tag = t.side === 'BUY' ? 'tag-buy' : 'tag-sell';
@@ -439,7 +495,7 @@
                 }
 
                 // History
-                if(data.trade_history.length > 0) {
+                if(data.trade_history && data.trade_history.length > 0) {
                     let histHtml = '';
                     data.trade_history.forEach(h => {
                         const resColor = h.pnl >= 0 ? 'var(--up)' : 'var(--down)';
