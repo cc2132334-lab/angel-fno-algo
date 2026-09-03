@@ -14,7 +14,7 @@
             --accent: #38bdf8;
             --up: #22c55e;
             --down: #ef4444;
-            --table-row-hover: #17243c;
+            --table-hover: #17243c;
         }
 
         [data-theme="light"] {
@@ -26,13 +26,13 @@
             --accent: #0284c7;
             --up: #16a34a;
             --down: #dc2626;
-            --table-row-hover: #f1f5f9;
+            --table-hover: #f1f5f9;
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; transition: background 0.2s, color 0.2s; }
         body { background: var(--bg); color: var(--text-main); padding: 12px; padding-bottom: 70px; }
-        .card { background: var(--card-bg); border-radius: 12px; padding: 14px; margin-bottom: 12px; border: 1px solid var(--border); box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-        h2 { font-size: 0.95rem; color: var(--accent); margin-bottom: 8px; text-transform: uppercase; }
+        .card { background: var(--card-bg); border-radius: 12px; padding: 14px; margin-bottom: 12px; border: 1px solid var(--border); }
+        h2 { font-size: 0.92rem; color: var(--accent); margin-bottom: 8px; text-transform: uppercase; }
         input, button { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text-main); margin-top: 8px; font-size: 0.95rem; }
         button { font-weight: bold; border: none; cursor: pointer; }
         
@@ -41,9 +41,9 @@
         
         .ticker-bar { display: flex; gap: 8px; margin-bottom: 12px; }
         .ticker-box { flex: 1; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; text-align: center; }
-        .ticker-name { font-size: 0.75rem; color: var(--text-muted); }
+        .ticker-name { font-size: 0.72rem; color: var(--text-muted); }
         .ticker-val { font-size: 1.15rem; font-weight: bold; margin-top: 2px; }
-        .ticker-chg { font-size: 0.8rem; font-weight: bold; margin-top: 2px; }
+        .ticker-chg { font-size: 0.78rem; font-weight: bold; margin-top: 2px; }
 
         .status-box { background: rgba(56, 189, 248, 0.08); color: var(--accent); padding: 10px; border-radius: 8px; font-size: 0.8rem; font-family: monospace; border: 1px dashed var(--accent); margin-bottom: 12px; }
 
@@ -51,10 +51,10 @@
         .tab-btn { flex: 1; padding: 8px; font-size: 0.75rem; background: var(--card-bg); border: 1px solid var(--border); color: var(--text-muted); border-radius: 6px; white-space: nowrap; margin-top: 0; }
         .tab-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
 
-        table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 8px; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 6px; }
         th, td { padding: 8px 4px; text-align: left; border-bottom: 1px solid var(--border); }
         th { color: var(--text-muted); }
-        tr:hover { background: var(--table-row-hover); }
+        tr:hover { background: var(--table-hover); }
 
         .up-text { color: var(--up); }
         .down-text { color: var(--down); }
@@ -65,10 +65,11 @@
 <body data-theme="dark">
 
     <div class="header-bar">
-        <h1 style="font-size: 1.1rem; font-weight: 800; letter-spacing: -0.5px;">⚡ ALGO TERMINAL</h1>
+        <h1 style="font-size: 1.1rem; font-weight: 800;">⚡ ALGO TERMINAL</h1>
         <button class="theme-btn" onclick="toggleTheme()" id="theme-btn">☀️ Light Mode</button>
     </div>
 
+    <!-- 1. Live Index Ticker -->
     <div class="ticker-bar">
         <div class="ticker-box">
             <div class="ticker-name">NIFTY 50</div>
@@ -82,12 +83,13 @@
         </div>
     </div>
 
-    <div class="status-box" id="system-status">System Initializing...</div>
+    <div class="status-box" id="system-status">Terminal Initializing...</div>
 
+    <!-- 2. Master Controls -->
     <div class="card" style="border-left: 4px solid #f59e0b;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
             <div>
-                <span style="font-size: 0.75rem; color: var(--text-muted);">NET REALIZED P&L</span>
+                <span style="font-size: 0.72rem; color: var(--text-muted);">TODAY'S NET P&L</span>
                 <div id="pnl-display" style="font-size: 1.3rem; font-weight: bold; color: var(--text-muted);">₹0.00</div>
             </div>
             <div id="mode-badge" style="font-size: 0.75rem; font-weight: bold; color: var(--accent);">SIMULATION MODE</div>
@@ -99,6 +101,7 @@
         <button id="btn-engine" onclick="toggleEngine()" style="background: #16a34a; color: white;">🟢 ENGINE RUNNING (Click to Pause)</button>
     </div>
 
+    <!-- 3. Angel One Login Form -->
     <div class="card" id="login-card">
         <h2>Broker Login (Angel One)</h2>
         <input type="text" id="api_key" placeholder="SmartAPI Key">
@@ -108,23 +111,35 @@
         <button style="background: var(--accent); color: white;" onclick="login()">Connect Broker</button>
     </div>
 
+    <!-- 4. Risk Allocator Slider -->
     <div class="card">
-        <h2>📊 Market Heat & Stats</h2>
+        <h2>Risk Per Signal</h2>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <label style="font-size: 0.82rem; color: var(--text-muted);">Per Trade Risk:</label>
+            <span id="risk-val" style="color: var(--up); font-size: 1.25rem; font-weight: bold;">₹500</span>
+        </div>
+        <input type="range" id="risk-slider" min="50" max="5000" step="50" value="500" oninput="changeRisk(this.value)">
+    </div>
+
+    <!-- 5. Market Heat & Stats -->
+    <div class="card">
+        <h2>📊 Market Heat & Movers</h2>
         <div class="tabs">
             <button class="tab-btn active" onclick="switchStatsTab('gainers', this)">🚀 Top Gainers</button>
             <button class="tab-btn" onclick="switchStatsTab('losers', this)">🔻 Top Losers</button>
             <button class="tab-btn" onclick="switchStatsTab('volume', this)">🔥 Volume Buzzers</button>
         </div>
-        <table id="stats-table">
+        <table>
             <thead>
                 <tr><th>Symbol</th><th>LTP</th><th>% Change</th></tr>
             </thead>
             <tbody id="stats-body">
-                <tr><td colspan="3" style="text-align:center; color: var(--text-muted);">Connecting to market stream...</td></tr>
+                <tr><td colspan="3" style="text-align:center; color: var(--text-muted);">Fetching market data...</td></tr>
             </tbody>
         </table>
     </div>
 
+    <!-- 6. Active Trades & Historical Logs -->
     <div class="card">
         <div class="tabs">
             <button class="tab-btn active" onclick="switchTradesTab('active', this)">⚡ Active Positions</button>
@@ -145,10 +160,10 @@
         <div id="history-view" style="display: none;">
             <table>
                 <thead>
-                    <tr><th>Time</th><th>Symbol</th><th>Side</th><th>Entry/Exit</th><th>Net P&L</th><th>Result</th></tr>
+                    <tr><th>Time</th><th>Symbol</th><th>Side</th><th>Entry/Exit</th><th>P&L</th><th>Result</th></tr>
                 </thead>
                 <tbody id="history-body">
-                    <tr><td colspan="6" style="text-align:center; color: var(--text-muted);">No historical trades recorded yet</td></tr>
+                    <tr><td colspan="6" style="text-align:center; color: var(--text-muted);">No closed trades yet</td></tr>
                 </tbody>
             </table>
         </div>
@@ -205,6 +220,15 @@
                 btn.innerText = "🛑 ENGINE PAUSED (Click to Resume)";
                 btn.style.background = "#dc2626";
             }
+        }
+
+        async function changeRisk(val) {
+            document.getElementById('risk-val').innerText = '₹' + val;
+            await fetch('/api/set-risk', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({risk: val})
+            });
         }
 
         async function switchMode(mode) {
@@ -269,7 +293,7 @@
             }
 
             if(list.length === 0) {
-                document.getElementById('stats-body').innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Fetching latest stats...</td></tr>`;
+                document.getElementById('stats-body').innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Fetching market data...</td></tr>`;
                 return;
             }
 
@@ -296,7 +320,7 @@
                 document.getElementById('system-status').innerText = data.status;
                 if(data.logged_in) document.getElementById('login-card').style.display = 'none';
 
-                // Real-time Index with % change
+                // Tickers
                 if(data.market_indices) {
                     const n = data.market_indices.NIFTY;
                     const s = data.market_indices.SENSEX;
@@ -316,15 +340,14 @@
                     }
                 }
 
-                // Total PnL
+                // P&L
                 const pnlElem = document.getElementById('pnl-display');
                 pnlElem.innerText = (data.total_pnl >= 0 ? '+₹' : '-₹') + Math.abs(data.total_pnl);
                 pnlElem.style.color = data.total_pnl >= 0 ? 'var(--up)' : 'var(--down)';
 
-                // Render Market Stats Tab
                 renderStats();
 
-                // Render Open Trades
+                // Active Trades
                 if(data.active_trades.length > 0) {
                     let html = '';
                     data.active_trades.forEach(t => {
@@ -342,7 +365,7 @@
                     document.getElementById('active-body').innerHTML = html;
                 }
 
-                // Render Trade History
+                // Trade History
                 if(data.trade_history.length > 0) {
                     let histHtml = '';
                     data.trade_history.forEach(h => {
