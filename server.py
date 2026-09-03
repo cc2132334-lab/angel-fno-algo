@@ -77,13 +77,18 @@ bot_state = {
     "c1_candidates": [],
     "active_trades": [],
     "trade_history": [],
+    "system_logs": [],
     "status_log": "Terminal Ready. Please connect broker."
 }
 
 def log(msg):
-    timestamp = get_ist_now().strftime("%H:%M:%S")
-    bot_state["status_log"] = f"[{timestamp} IST] {msg}"
-    print(bot_state["status_log"])
+    timestamp = get_ist_now().strftime("%I:%M:%S %p")
+    entry = f"[{timestamp} IST] {msg}"
+    bot_state["status_log"] = entry
+    bot_state["system_logs"].append(entry)
+    if len(bot_state["system_logs"]) > 150:
+        bot_state["system_logs"].pop(0)
+    print(entry)
 
 def calculate_quantity(risk_amount, entry_price, sl_price):
     try:
@@ -316,6 +321,7 @@ def get_state():
         "risk_amount": bot_state["risk_amount"],
         "trades_executed_today": bot_state["trades_executed_today"],
         "status": bot_state["status_log"],
+        "system_logs": bot_state["system_logs"],
         "total_pnl": bot_state["total_pnl"],
         "market_indices": bot_state["market_indices"],
         "market_stats": bot_state["market_stats"],
@@ -485,7 +491,7 @@ def background_scanner():
                             "pnl": 0.0,
                             "status": status,
                             "mode": mode,
-                            "time": get_ist_now().strftime("%H:%M:%S")
+                            "time": get_ist_now().strftime("%I:%M:%S %p")
                         })
                         bot_state["trades_executed_today"] += 1
                         log(f"Trade Entered [{mode}]: {side} {cand['symbol']} Qty:{qty} SL:{sl} Target:{final_target}")
@@ -518,11 +524,10 @@ def market_data_monitor():
         except Exception:
             pass
 
-        # Real F&O Stock Market Movers (NO DUMMY DATA)
+        # Real F&O Stock Market Movers
         if (now_ts - last_stats_check > 15) and bot_state["fno_stocks"]:
             last_stats_check = now_ts
             stock_perf = []
-            
             for s in bot_state["fno_stocks"][:40]:
                 try:
                     res = bot_state["smart_api"].ltpData("NSE", s["symbol"], str(s["token"]))
@@ -606,7 +611,7 @@ def market_data_monitor():
 
 def record_trade_history(trade, exit_price):
     bot_state["trade_history"].append({
-        "time": get_ist_now().strftime("%H:%M:%S"),
+        "time": get_ist_now().strftime("%I:%M:%S %p"),
         "symbol": trade["symbol"],
         "side": trade["side"],
         "entry": trade["entry"],
