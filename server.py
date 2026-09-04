@@ -57,7 +57,6 @@ def save_user_config(client_code):
     except Exception as e:
         print(f"Config save error: {e}")
 
-# SHARED MARKET DATA POOL
 shared_market = {
     "fno_stocks": [],
     "fno_fut_map": {},
@@ -71,12 +70,9 @@ shared_market = {
         "top_oi_losers": []
     },
     "c1_candidates": [],
-    "universe_loaded": False,
-    "primary_api": None,
-    "daemons_started": False
+    "primary_api": None
 }
 
-# ISOLATED MULTI-USER STORAGE
 user_sessions = {}
 
 def get_current_user():
@@ -84,6 +80,16 @@ def get_current_user():
     if client_code and client_code in user_sessions:
         return user_sessions[client_code]
     return None
+
+def broadcast_log(msg):
+    timestamp = get_ist_now().strftime("%I:%M:%S %p")
+    entry = f"[{timestamp} IST] {msg}"
+    print(entry)
+    for u in user_sessions.values():
+        u["status_log"] = entry
+        u["system_logs"].append(entry)
+        if len(u["system_logs"]) > 200:
+            u["system_logs"].pop(0)
 
 def user_log(client_code, msg):
     timestamp = get_ist_now().strftime("%I:%M:%S %p")
@@ -128,34 +134,9 @@ def fetch_candles(token, interval="FIVE_MINUTE", days=2, api_instance=None):
         pass
     return None
 
-def fetch_daily_pdh_pdl(token, api_instance):
-    now = get_ist_now()
-    from_date = (now - datetime.timedelta(days=12)).strftime("%Y-%m-%d 09:15")
-    to_date = (now - datetime.timedelta(days=1)).strftime("%Y-%m-%d 15:30")
-    params = {
-        "exchange": "NSE",
-        "symboltoken": str(token),
-        "interval": "ONE_DAY",
-        "fromdate": from_date,
-        "todate": to_date
-    }
-    try:
-        data = api_instance.getCandleData(params)
-        if data and data.get("status") and data.get("data"):
-            df = pd.DataFrame(data["data"], columns=["time", "open", "high", "low", "close", "volume"])
-            if not df.empty:
-                last_day = df.iloc[-1]
-                avg_5d_vol = float(df["volume"].tail(5).mean()) if len(df) >= 2 else float(last_day["volume"])
-                return float(last_day["high"]), float(last_day["low"]), float(last_day["close"]), float(last_day["volume"]), avg_5d_vol
-    except Exception:
-        pass
-    return None, None, None, 0, 1.0
-
 def load_fno_universe(api_instance):
-    if shared_market["universe_loaded"]:
-        return
     try:
-        print("Downloading Angel One Master & extracting F&O universe...")
+        broadcast_log("Downloading Angel One Master & extracting F&O universe...")
         url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
         res = requests.get(url, timeout=25)
         master = res.json()
@@ -163,7 +144,7 @@ def load_fno_universe(api_instance):
         fno_symbols = {}
         for s in master:
             if s.get('exch_seg') == 'NFO' and s.get('instrumenttype') == 'FUTSTK':
-                base_name = s.get('name', '').strip().upper()
+                base_name = str(s.get('name', '')).strip().upper()
                 if base_name and "TEST" not in base_name:
                     if base_name not in fno_symbols:
                         fno_symbols[base_name] = {
@@ -185,37 +166,41 @@ def load_fno_universe(api_instance):
                             "name": clean_name,
                             "token": str(s.get('token')),
                             "fut_symbol": fno_symbols[clean_name]["fut_symbol"],
-                            "fut_token": fno_symbols[clean_name]["fut_token"]
+                            "fut_token": fno_symbols[clean_name]["fut_token"],
+                            "pdh": 0.0,
+                            "pdl": 0.0
                         })
 
-        print(f"Verified {len(matched_stocks)} pure F&O Cash stocks. Loading PDH & PDL...")
+        broadcast_log(f"Verified {len(matched_stocks)} F&O Cash stocks. Loading daily PDH/PDL...")
 
-        final_list = []
-        fut_map = {}
+        # Fast parallel PDH/PDL fetch with non-blocking sleep
         for item in matched_stocks:
-            time.sleep(0.015)
-            pdh, pdl, prev_close, last_vol, avg_vol = fetch_daily_pdh_pdl(item["token"], api_instance)
-            final_list.append({
-                "symbol": item["symbol"],
-                "token": item["token"],
-                "name": item["name"],
-                "pdh": pdh or 0.0,
-                "pdl": pdl or 0.0,
-                "prev_close": prev_close or 0.0,
-                "last_daily_vol": last_vol or 0,
-                "avg_5d_vol": avg_vol if avg_vol > 0 else 1.0,
-                "fut_symbol": item["fut_symbol"],
-                "fut_token": item["fut_token"]
-            })
-            fut_map[item["name"]] = {"symbol": item["fut_symbol"], "token": item["fut_token"]}
+            time.sleep(0.01)
+            try:
+                now = get_ist_now()
+                from_date = (now - datetime.timedelta(days=10)).strftime("%Y-%m-%d 09:15")
+                to_date = (now - datetime.timedelta(days=1)).strftime("%Y-%m-%d 15:30")
+                p = {
+                    "exchange": "NSE",
+                    "symboltoken": str(item["token"]),
+                    "interval": "ONE_DAY",
+                    "fromdate": from_date,
+                    "todate": to_date
+                }
+                c_data = api_instance.getCandleData(p)
+                if c_data and c_data.get("status") and c_data.get("data"):
+                    df_d = pd.DataFrame(c_data["data"], columns=["time", "open", "high", "low", "close", "volume"])
+                    if not df_d.empty:
+                        item["pdh"] = float(df_d.iloc[-1]["high"])
+                        item["pdl"] = float(df_d.iloc[-1]["low"])
+            except Exception:
+                pass
 
-        shared_market["fno_stocks"] = final_list
-        shared_market["fno_fut_map"] = fut_map
-        shared_market["universe_loaded"] = True
-        print(f"SUCCESS: {len(shared_market['fno_stocks'])} pure F&O Cash stocks loaded.")
+        shared_market["fno_stocks"] = matched_stocks
+        broadcast_log(f"SUCCESS: {len(shared_market['fno_stocks'])} pure F&O Cash stocks loaded. Ready for scan.")
         update_oi_stats()
     except Exception as e:
-        print(f"Universe sync error: {e}")
+        broadcast_log(f"Universe sync error: {e}")
 
 @app.route('/')
 def index():
@@ -263,18 +248,11 @@ def api_login():
             }
 
             session["client_code"] = client_code
+            shared_market["primary_api"] = smart_api
 
-            # Start background market stream immediately
-            if not shared_market["primary_api"]:
-                shared_market["primary_api"] = smart_api
-
-            if not shared_market["universe_loaded"]:
+            # ALWAYS trigger universe load on login if empty
+            if len(shared_market["fno_stocks"]) < 50:
                 threading.Thread(target=load_fno_universe, args=(smart_api,), daemon=True).start()
-
-            if not shared_market["daemons_started"]:
-                shared_market["daemons_started"] = True
-                threading.Thread(target=background_scanner, daemon=True).start()
-                threading.Thread(target=market_data_monitor, daemon=True).start()
 
             user_log(client_code, f"Connected successfully as {client_code}. Market feed armed.")
             return jsonify({"status": "success", "message": "Login Successful!"})
@@ -352,7 +330,7 @@ def manual_5x_scan():
 
     stocks_to_scan = shared_market["fno_stocks"]
     if not stocks_to_scan:
-        return jsonify({"status": "error", "message": "F&O universe loading..."})
+        return jsonify({"status": "error", "message": "F&O universe loading, wait 10 seconds..."})
 
     filtered_results = []
     for item in stocks_to_scan:
@@ -483,18 +461,14 @@ def cancel_live_order(api, order_id, variety="STOPLOSS"):
         return False
 
 # =========================================================================
-# STRATEGY SCANNER & MULTI-USER DISPATCH
+# CORE BACKGROUND STRATEGY & MONITOR
 # =========================================================================
 def background_scanner():
     c1_scanned = False
 
     while True:
-        if not shared_market["universe_loaded"] or len(shared_market["fno_stocks"]) < 100:
-            time.sleep(1)
-            continue
-
         api = shared_market["primary_api"]
-        if not api:
+        if not api or len(shared_market["fno_stocks"]) < 50:
             time.sleep(1)
             continue
 
@@ -502,7 +476,7 @@ def background_scanner():
         now_time = now_ist.time()
 
         if not c1_scanned and now_time >= datetime.time(9, 20, 2):
-            print(f"Scanning all {len(shared_market['fno_stocks'])} F&O stocks for 5x Volume + PDH/PDL...")
+            broadcast_log(f"Scanning all {len(shared_market['fno_stocks'])} F&O stocks for 5x Volume + PDH/PDL...")
             candidates = []
 
             for item in shared_market["fno_stocks"]:
@@ -540,6 +514,7 @@ def background_scanner():
                             })
 
             shared_market["c1_candidates"] = candidates
+            broadcast_log(f"C1 Scan Complete: {len(candidates)} candidate(s) ready.")
             c1_scanned = True
 
         if c1_scanned and now_time >= datetime.time(9, 25, 2):
@@ -734,9 +709,6 @@ def background_scanner():
 
         time.sleep(1)
 
-# =========================================================================
-# REALTIME NIFTY, SENSEX & OI MONITOR
-# =========================================================================
 def update_oi_stats():
     api = shared_market["primary_api"]
     if not api or not shared_market["fno_stocks"]:
@@ -885,6 +857,10 @@ def record_user_trade_history(user_obj, trade, exit_price):
         "pnl": trade["pnl"],
         "status": trade["status"]
     })
+
+# Start daemon threads once at boot
+threading.Thread(target=background_scanner, daemon=True).start()
+threading.Thread(target=market_data_monitor, daemon=True).start()
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
