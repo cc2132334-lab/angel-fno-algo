@@ -89,7 +89,6 @@
         <button class="theme-btn" onclick="toggleTheme()" id="theme-btn">🌙 Dark Mode</button>
     </div>
 
-    <!-- Real-time Live Market Clock Bar -->
     <div class="clock-card">
         <div class="mkt-status">
             <span class="status-dot dot-red" id="mkt-dot"></span>
@@ -98,7 +97,7 @@
         <div class="clock-time" id="live-clock">--:--:-- --</div>
     </div>
 
-    <!-- 1. LOGIN CARD (FIRST SCREEN) -->
+    <!-- 1. LOGIN CARD -->
     <div class="card" id="login-card" style="border: 2px solid var(--accent); padding: 18px;">
         <h2 style="font-size: 1.05rem; margin-bottom: 8px; text-align: center;">🔐 Connect Angel One Broker</h2>
         <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px; text-align: center;">Terminal access karne ke liye broker connect karein.</p>
@@ -109,10 +108,9 @@
         <button id="login-btn" style="background: var(--accent); color: white; margin-top: 12px; padding: 11px;" onclick="login()">Connect Broker & Unlock Terminal</button>
     </div>
 
-    <!-- 2. MAIN TERMINAL (UNLOCKS AFTER LOGIN) -->
+    <!-- 2. MAIN TERMINAL -->
     <div id="main-terminal" style="display: none;">
         
-        <!-- Live NIFTY / SENSEX -->
         <div class="ticker-bar">
             <div class="ticker-box">
                 <div class="ticker-name">NIFTY 50</div>
@@ -192,7 +190,7 @@
             </div>
         </div>
 
-        <!-- MANUAL SCANNER -->
+        <!-- MANUAL SCANNER (WITH STOP BUTTON) -->
         <div class="card">
             <h2>🔍 Manual 5x Volume Scanner (F&O Cash Only)</h2>
             <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 8px;">Date select karke 9:15-9:20 AM C1 candle ka 5x Volume breakout scan karein.</p>
@@ -202,8 +200,9 @@
                     <label style="font-size: 0.72rem; color: var(--text-muted);">Select Date for Analysis</label>
                     <input type="date" id="scan-date">
                 </div>
-                <div style="display: flex; align-items: flex-end;">
-                    <button onclick="runManual5xScan()" id="btn-scan" style="background: var(--accent); color: white;">🚀 Scan 5x Volume</button>
+                <div style="display: flex; gap: 6px; align-items: flex-end;">
+                    <button onclick="runManual5xScan()" id="btn-scan" style="background: var(--accent); color: white; flex: 2;">🚀 Scan 5x Volume</button>
+                    <button onclick="stopManualScan()" id="btn-stop-scan" style="background: #dc2626; color: white; flex: 1; display: none;">⏹️ Stop</button>
                 </div>
             </div>
             
@@ -227,7 +226,7 @@
             </div>
         </div>
 
-        <!-- MARKET MOVERS -->
+        <!-- MARKET MOVERS (MATCHES ANGEL ONE APP) -->
         <div class="card">
             <h2>📊 Market Movers (Watch Only)</h2>
             <div class="tabs" id="movers-tabs">
@@ -237,7 +236,7 @@
             </div>
             <table>
                 <thead><tr><th>Symbol</th><th>LTP</th><th>% Change</th></tr></thead>
-                <tbody id="stats-body"><tr><td colspan="3" style="text-align:center; color: var(--text-muted);">Streaming live tick data...</td></tr></tbody>
+                <tbody id="stats-body"><tr><td colspan="3" style="text-align:center; color: var(--text-muted);">Loading live market analytics...</td></tr></tbody>
             </table>
         </div>
 
@@ -345,8 +344,10 @@
             if(!dateVal) return alert("Please select a date first");
 
             const scanBtn = document.getElementById('btn-scan');
+            const stopBtn = document.getElementById('btn-stop-scan');
             scanBtn.innerText = "Scanning...";
             scanBtn.disabled = true;
+            stopBtn.style.display = 'block';
 
             const res = await fetch('/api/manual-5x-scan', {
                 method: 'POST',
@@ -356,14 +357,16 @@
             const data = await res.json();
             scanBtn.innerText = "🚀 Scan 5x Volume";
             scanBtn.disabled = false;
+            stopBtn.style.display = 'none';
 
             if(data.status === 'success') {
                 const container = document.getElementById('manual-scan-results');
                 container.style.display = 'block';
-                document.getElementById('scan-summary').innerText = `Date: ${data.date} | Found: ${data.count} stocks with >= 5x Volume in C1`;
+                const statusTxt = data.cancelled ? " (Stopped Early)" : "";
+                document.getElementById('scan-summary').innerText = `Date: ${data.date} | Found: ${data.count} stocks${statusTxt}`;
 
                 if(data.results.length === 0) {
-                    document.getElementById('manual-scan-body').innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No stock met >= 5x C1 volume criteria on this date</td></tr>`;
+                    document.getElementById('manual-scan-body').innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No stock met >= 5x C1 volume criteria</td></tr>`;
                     return;
                 }
 
@@ -382,6 +385,15 @@
             } else {
                 alert(data.message);
             }
+        }
+
+        async function stopManualScan() {
+            await fetch('/api/stop-manual-scan', {method: 'POST'});
+            const scanBtn = document.getElementById('btn-scan');
+            const stopBtn = document.getElementById('btn-stop-scan');
+            scanBtn.innerText = "🚀 Scan 5x Volume";
+            scanBtn.disabled = false;
+            stopBtn.style.display = 'none';
         }
 
         async function login() {
@@ -499,7 +511,7 @@
             else if(currentStatsTab === 'volume') { list = pool.volume_buzzers || []; isVol = true; }
 
             if(!list || list.length === 0) {
-                document.getElementById('stats-body').innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Streaming live tick data...</td></tr>`;
+                document.getElementById('stats-body').innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Loading real-time analytics...</td></tr>`;
                 return;
             }
 
@@ -511,7 +523,7 @@
                 let extra = '';
                 if (isVol) {
                     const burstTag = item.burst ? `<span class="highlight-vol">${item.burst}x</span>` : '';
-                    extra = `<br><small style="color:var(--text-muted)">Vol: ${item.volume.toLocaleString()} ${burstTag}</small>`;
+                    extra = `<br><small style="color:var(--text-muted)">Burst: ${burstTag}</small>`;
                 }
 
                 html += `<tr><td><b>${item.symbol}</b>${extra}</td><td>₹${item.ltp}</td><td class="${cls}"><b>${sign}${item.pchange}%</b></td></tr>`;
