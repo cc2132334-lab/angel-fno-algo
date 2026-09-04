@@ -77,8 +77,9 @@
         .tag-sell { color: var(--down); background: rgba(239, 68, 68, 0.15); padding: 2px 6px; border-radius: 4px; font-weight: bold; }
         .tag-pending { color: #f59e0b; background: rgba(245, 158, 11, 0.15); padding: 2px 6px; border-radius: 4px; font-weight: bold; }
         .tag-invalid { color: #ef4444; background: rgba(239, 68, 68, 0.15); padding: 2px 6px; border-radius: 4px; font-weight: bold; }
-        .highlight-vol { background: rgba(56, 189, 248, 0.2); color: var(--accent); padding: 2px 6px; border-radius: 4px; font-weight: bold; }
-        
+        .highlight-oi { background: rgba(147, 51, 234, 0.15); color: #9333ea; padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+        [data-theme="dark"] .highlight-oi { color: #c084fc; }
+
         .log-box { background: rgba(15, 23, 42, 0.04); border: 1px solid var(--border); border-radius: 8px; padding: 10px; max-height: 250px; overflow-y: auto; font-family: monospace; font-size: 0.75rem; line-height: 1.5; }
         [data-theme="dark"] .log-box { background: rgba(0, 0, 0, 0.3); }
         .log-entry { margin-bottom: 4px; border-bottom: 1px dashed rgba(148, 163, 184, 0.15); padding-bottom: 2px; }
@@ -228,17 +229,16 @@
             </div>
         </div>
 
-        <!-- MARKET MOVERS -->
+        <!-- TOP OI STATS (WATCH ONLY) -->
         <div class="card">
-            <h2>📊 Market Movers (Watch Only)</h2>
-            <div class="tabs" id="movers-tabs">
-                <button class="tab-btn active" onclick="switchStatsTab('gainers', this)">🚀 Top Gainers</button>
-                <button class="tab-btn" onclick="switchStatsTab('losers', this)">🔻 Top Losers</button>
-                <button class="tab-btn" onclick="switchStatsTab('volume', this)">🔥 Volume Buzzers</button>
+            <h2>📈 Top Open Interest Movers (Watch Only)</h2>
+            <div class="tabs" id="oi-tabs">
+                <button class="tab-btn active" onclick="switchOITab('gainers', this)">🚀 Top OI Gainers</button>
+                <button class="tab-btn" onclick="switchOITab('losers', this)">🔻 Top OI Losers</button>
             </div>
             <table>
-                <thead><tr><th>Symbol</th><th>LTP</th><th>% Change</th></tr></thead>
-                <tbody id="stats-body"><tr><td colspan="3" style="text-align:center; color: var(--text-muted);">Streaming live tick data...</td></tr></tbody>
+                <thead><tr><th>Symbol</th><th>LTP</th><th>OI Chg %</th><th>Open Interest</th></tr></thead>
+                <tbody id="oi-body"><tr><td colspan="4" style="text-align:center; color: var(--text-muted);">Loading Open Interest data...</td></tr></tbody>
             </table>
         </div>
 
@@ -262,8 +262,8 @@
             <!-- Pending Orders View -->
             <div id="pending-view" style="display: none;">
                 <table>
-                    <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>SL-M Trigger</th><th>Inval Level</th><th>Qty</th><th>Status</th></tr></thead>
-                    <tbody id="pending-body"><tr><td colspan="7" style="text-align:center; color: var(--text-muted);">No pending SL-M orders</td></tr></tbody>
+                    <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Type</th><th>Trigger/Px</th><th>Inval Level</th><th>Qty</th><th>Status</th></tr></thead>
+                    <tbody id="pending-body"><tr><td colspan="8" style="text-align:center; color: var(--text-muted);">No pending orders</td></tr></tbody>
                 </table>
             </div>
 
@@ -286,7 +286,7 @@
     </div>
 
     <script>
-        let currentStatsTab = 'gainers';
+        let currentOITab = 'gainers';
         let isEngineRunning = true;
         let cachedState = null;
         let settingsRestored = false;
@@ -314,11 +314,7 @@
             const now = new Date();
             const istOptions = { timeZone: "Asia/Kolkata", hour12: true, hour: "2-digit", minute: "2-digit", second: "2-digit" };
             const dateOptions = { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "numeric" };
-            
-            const timeStr = now.toLocaleTimeString("en-US", istOptions);
-            const dateStr = now.toLocaleDateString("en-GB", dateOptions);
-
-            document.getElementById('live-clock').innerText = `${dateStr} | ${timeStr}`;
+            document.getElementById('live-clock').innerText = `${now.toLocaleDateString("en-GB", dateOptions)} | ${now.toLocaleTimeString("en-US", istOptions)}`;
         }
         setInterval(updateLiveClock, 1000);
         updateLiveClock();
@@ -486,11 +482,11 @@
             }
         }
 
-        function switchStatsTab(tab, btn) {
-            currentStatsTab = tab;
-            document.querySelectorAll('#movers-tabs button').forEach(b => b.classList.remove('active'));
+        function switchOITab(tab, btn) {
+            currentOITab = tab;
+            document.querySelectorAll('#oi-tabs button').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            renderStats();
+            renderOIStats();
         }
 
         function switchTradesTab(tab, btn) {
@@ -519,37 +515,37 @@
             }
         }
 
-        function renderStats() {
+        function renderOIStats() {
             if(!cachedState) return;
-            const pool = cachedState.market_stats || cachedState.market_movers;
+            const pool = cachedState.market_stats;
             if(!pool) return;
 
-            let list = [];
-            let isVol = false;
-            if(currentStatsTab === 'gainers') list = pool.top_gainers || [];
-            else if(currentStatsTab === 'losers') list = pool.top_losers || [];
-            else if(currentStatsTab === 'volume') { list = pool.volume_buzzers || []; isVol = true; }
+            let list = (currentOITab === 'gainers') ? (pool.top_oi_gainers || []) : (pool.top_oi_losers || []);
 
             if(!list || list.length === 0) {
-                document.getElementById('stats-body').innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Streaming live tick data...</td></tr>`;
+                document.getElementById('oi-body').innerHTML = `<tr><td colspan="4" style="text-align:center; color:var(--text-muted);">Fetching live Open Interest data...</td></tr>`;
                 return;
             }
 
             let html = '';
             list.forEach(item => {
-                const cls = item.pchange >= 0 ? 'up-text' : 'down-text';
-                const sign = item.pchange >= 0 ? '+' : '';
-                let extra = isVol ? `<br><small style="color:var(--text-muted)">Burst: <span class="highlight-vol">${item.burst}x</span></small>` : '';
-                html += `<tr><td><b>${item.symbol}</b>${extra}</td><td>₹${item.ltp}</td><td class="${cls}"><b>${sign}${item.pchange}%</b></td></tr>`;
+                const cls = item.oi_change >= 0 ? 'up-text' : 'down-text';
+                const sign = item.oi_change >= 0 ? '+' : '';
+                html += `<tr>
+                    <td><b>${item.symbol}</b></td>
+                    <td>₹${item.ltp}</td>
+                    <td class="${cls}"><b>${sign}${item.oi_change}%</b></td>
+                    <td><span class="highlight-oi">${item.oi.toLocaleString()}</span></td>
+                </tr>`;
             });
-            document.getElementById('stats-body').innerHTML = html;
+            document.getElementById('oi-body').innerHTML = html;
         }
 
         function renderPending() {
             if(!cachedState) return;
             const pendings = cachedState.pending_orders || [];
             if(pendings.length === 0) {
-                document.getElementById('pending-body').innerHTML = `<tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No pending SL-M orders</td></tr>`;
+                document.getElementById('pending-body').innerHTML = `<tr><td colspan="8" style="text-align:center; color:var(--text-muted);">No pending orders</td></tr>`;
                 return;
             }
             let html = '';
@@ -564,6 +560,7 @@
                     <td><small style="color:var(--text-muted)">${p.time}</small></td>
                     <td><b>${p.symbol}</b></td>
                     <td><span class="${sideClass}">${p.side}</span></td>
+                    <td><small><b>${p.order_type || 'SL-M'}</b></small></td>
                     <td>₹${p.trigger_price}</td>
                     <td style="color:#ef4444; font-weight:bold;">${invalTxt}</td>
                     <td>${p.qty}</td>
@@ -647,7 +644,7 @@
                 pnlElem.innerText = (data.total_pnl >= 0 ? '+₹' : '-₹') + Math.abs(data.total_pnl);
                 pnlElem.style.color = data.total_pnl >= 0 ? 'var(--up)' : 'var(--down)';
 
-                renderStats();
+                renderOIStats();
 
                 if(data.active_trades && data.active_trades.length > 0) {
                     let html = '';
