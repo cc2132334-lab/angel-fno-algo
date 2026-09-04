@@ -75,6 +75,8 @@
         .down-text { color: var(--down); }
         .tag-buy { color: var(--up); background: rgba(34, 197, 94, 0.15); padding: 2px 6px; border-radius: 4px; font-weight: bold; }
         .tag-sell { color: var(--down); background: rgba(239, 68, 68, 0.15); padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+        .tag-pending { color: #f59e0b; background: rgba(245, 158, 11, 0.15); padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+        .tag-invalid { color: #ef4444; background: rgba(239, 68, 68, 0.15); padding: 2px 6px; border-radius: 4px; font-weight: bold; }
         .highlight-vol { background: rgba(56, 189, 248, 0.2); color: var(--accent); padding: 2px 6px; border-radius: 4px; font-weight: bold; }
         
         .log-box { background: rgba(15, 23, 42, 0.04); border: 1px solid var(--border); border-radius: 8px; padding: 10px; max-height: 250px; overflow-y: auto; font-family: monospace; font-size: 0.75rem; line-height: 1.5; }
@@ -190,7 +192,7 @@
             </div>
         </div>
 
-        <!-- MANUAL SCANNER (WITH STOP BUTTON) -->
+        <!-- MANUAL SCANNER -->
         <div class="card">
             <h2>🔍 Manual 5x Volume Scanner (F&O Cash Only)</h2>
             <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 8px;">Date select karke 9:15-9:20 AM C1 candle ka 5x Volume breakout scan karein.</p>
@@ -226,7 +228,7 @@
             </div>
         </div>
 
-        <!-- MARKET MOVERS (MATCHES ANGEL ONE APP) -->
+        <!-- MARKET MOVERS -->
         <div class="card">
             <h2>📊 Market Movers (Watch Only)</h2>
             <div class="tabs" id="movers-tabs">
@@ -236,18 +238,20 @@
             </div>
             <table>
                 <thead><tr><th>Symbol</th><th>LTP</th><th>% Change</th></tr></thead>
-                <tbody id="stats-body"><tr><td colspan="3" style="text-align:center; color: var(--text-muted);">Loading live market analytics...</td></tr></tbody>
+                <tbody id="stats-body"><tr><td colspan="3" style="text-align:center; color: var(--text-muted);">Streaming live tick data...</td></tr></tbody>
             </table>
         </div>
 
-        <!-- ACTIVE POSITIONS, TRADE HISTORY & SYSTEM LOGS -->
+        <!-- ACTIVE POSITIONS, PENDING ORDERS, TRADE HISTORY & SYSTEM LOGS -->
         <div class="card">
             <div class="tabs" id="execution-tabs">
                 <button class="tab-btn active" onclick="switchTradesTab('active', this)">⚡ Active Positions</button>
+                <button class="tab-btn" onclick="switchTradesTab('pending', this)">⏳ Pending Orders</button>
                 <button class="tab-btn" onclick="switchTradesTab('history', this)">📜 Trade History</button>
                 <button class="tab-btn" onclick="switchTradesTab('logs', this)">📝 Activity Logs</button>
             </div>
 
+            <!-- Active Positions View -->
             <div id="active-view">
                 <table>
                     <thead><tr><th>Symbol</th><th>Side</th><th>Entry</th><th>SL</th><th>Qty</th><th>P&L</th><th>Status</th></tr></thead>
@@ -255,6 +259,15 @@
                 </table>
             </div>
 
+            <!-- Pending Orders View -->
+            <div id="pending-view" style="display: none;">
+                <table>
+                    <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>SL-M Trigger</th><th>Inval Level</th><th>Qty</th><th>Status</th></tr></thead>
+                    <tbody id="pending-body"><tr><td colspan="7" style="text-align:center; color: var(--text-muted);">No pending SL-M orders</td></tr></tbody>
+                </table>
+            </div>
+
+            <!-- Trade History View -->
             <div id="history-view" style="display: none;">
                 <table>
                     <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Entry → Exit</th><th>P&L</th><th>Result</th></tr></thead>
@@ -262,6 +275,7 @@
                 </table>
             </div>
 
+            <!-- Activity Logs View -->
             <div id="logs-view" style="display: none;">
                 <div class="log-box" id="logs-container">
                     <div style="color: var(--text-muted); text-align: center;">Waiting for logs...</div>
@@ -484,14 +498,20 @@
             btn.classList.add('active');
 
             const actV = document.getElementById('active-view');
+            const penV = document.getElementById('pending-view');
             const hisV = document.getElementById('history-view');
             const logV = document.getElementById('logs-view');
 
             actV.style.display = 'none';
+            penV.style.display = 'none';
             hisV.style.display = 'none';
             logV.style.display = 'none';
 
             if(tab === 'active') actV.style.display = 'block';
+            else if(tab === 'pending') {
+                penV.style.display = 'block';
+                renderPending();
+            }
             else if(tab === 'history') hisV.style.display = 'block';
             else if(tab === 'logs') {
                 logV.style.display = 'block';
@@ -511,7 +531,7 @@
             else if(currentStatsTab === 'volume') { list = pool.volume_buzzers || []; isVol = true; }
 
             if(!list || list.length === 0) {
-                document.getElementById('stats-body').innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Loading real-time analytics...</td></tr>`;
+                document.getElementById('stats-body').innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Streaming live tick data...</td></tr>`;
                 return;
             }
 
@@ -519,16 +539,38 @@
             list.forEach(item => {
                 const cls = item.pchange >= 0 ? 'up-text' : 'down-text';
                 const sign = item.pchange >= 0 ? '+' : '';
-                
-                let extra = '';
-                if (isVol) {
-                    const burstTag = item.burst ? `<span class="highlight-vol">${item.burst}x</span>` : '';
-                    extra = `<br><small style="color:var(--text-muted)">Burst: ${burstTag}</small>`;
-                }
-
+                let extra = isVol ? `<br><small style="color:var(--text-muted)">Burst: <span class="highlight-vol">${item.burst}x</span></small>` : '';
                 html += `<tr><td><b>${item.symbol}</b>${extra}</td><td>₹${item.ltp}</td><td class="${cls}"><b>${sign}${item.pchange}%</b></td></tr>`;
             });
             document.getElementById('stats-body').innerHTML = html;
+        }
+
+        function renderPending() {
+            if(!cachedState) return;
+            const pendings = cachedState.pending_orders || [];
+            if(pendings.length === 0) {
+                document.getElementById('pending-body').innerHTML = `<tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No pending SL-M orders</td></tr>`;
+                return;
+            }
+            let html = '';
+            pendings.forEach(p => {
+                const sideClass = p.side === 'BUY' ? 'tag-buy' : 'tag-sell';
+                const invalTxt = p.side === 'BUY' ? `< ₹${p.c1_low}` : `> ₹${p.c1_high}`;
+                let statusBadge = `<span class="tag-pending">${p.status}</span>`;
+                if(p.status === 'CANCELLED_INVALID') statusBadge = `<span class="tag-invalid">INVALID (BREAK)</span>`;
+                if(p.status === 'TRIGGERED') statusBadge = `<span class="tag-buy">FILLED</span>`;
+
+                html += `<tr>
+                    <td><small style="color:var(--text-muted)">${p.time}</small></td>
+                    <td><b>${p.symbol}</b></td>
+                    <td><span class="${sideClass}">${p.side}</span></td>
+                    <td>₹${p.trigger_price}</td>
+                    <td style="color:#ef4444; font-weight:bold;">${invalTxt}</td>
+                    <td>${p.qty}</td>
+                    <td>${statusBadge}</td>
+                </tr>`;
+            });
+            document.getElementById('pending-body').innerHTML = html;
         }
 
         function renderLogs() {
@@ -623,6 +665,10 @@
                         </tr>`;
                     });
                     document.getElementById('active-body').innerHTML = html;
+                }
+
+                if(document.getElementById('pending-view').style.display === 'block') {
+                    renderPending();
                 }
 
                 if(data.trade_history && data.trade_history.length > 0) {
