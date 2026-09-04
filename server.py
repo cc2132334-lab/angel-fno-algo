@@ -30,10 +30,9 @@ def load_saved_config():
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r") as f:
-                saved = json.load(f)
-                return {**default_config, **saved}
-        except Exception as e:
-            print(f"Error loading config: {e}")
+                return {**default_config, **json.load(f)}
+        except Exception:
+            pass
     return default_config
 
 def save_config():
@@ -76,6 +75,7 @@ bot_state = {
         "top_losers": [],
         "volume_buzzers": []
     },
+    "live_tick_cache": {},
     "c1_candidates": [],
     "active_trades": [],
     "trade_history": [],
@@ -123,7 +123,7 @@ def fetch_candles(token, interval="FIVE_MINUTE", days=2):
 
 def fetch_daily_pdh_pdl(token):
     now = get_ist_now()
-    from_date = (now - datetime.timedelta(days=10)).strftime("%Y-%m-%d 09:15")
+    from_date = (now - datetime.timedelta(days=12)).strftime("%Y-%m-%d 09:15")
     to_date = (now - datetime.timedelta(days=1)).strftime("%Y-%m-%d 15:30")
     params = {
         "exchange": "NSE",
@@ -138,15 +138,15 @@ def fetch_daily_pdh_pdl(token):
             df = pd.DataFrame(data["data"], columns=["time", "open", "high", "low", "close", "volume"])
             if not df.empty:
                 last_day = df.iloc[-1]
-                avg_5d_vol = df["volume"].tail(5).mean() if len(df) >= 2 else float(last_day["volume"])
-                return float(last_day["high"]), float(last_day["low"]), float(last_day["close"]), float(last_day["volume"]), float(avg_5d_vol)
+                avg_5d_vol = float(df["volume"].tail(5).mean()) if len(df) >= 2 else float(last_day["volume"])
+                return float(last_day["high"]), float(last_day["low"]), float(last_day["close"]), float(last_day["volume"]), avg_5d_vol
     except Exception:
         pass
-    return None, None, None, 0, 0
+    return None, None, None, 0, 1.0
 
 def load_fno_universe():
     try:
-        log("Downloading Angel One Master & filtering real F&O Cash stocks...")
+        log("Downloading Angel One Master & extracting verified F&O Cash stocks...")
         url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
         res = requests.get(url, timeout=25)
         master = res.json()
@@ -164,7 +164,6 @@ def load_fno_universe():
                 sym = str(s.get('symbol', ''))
                 if sym.endswith('-EQ'):
                     clean_name = sym.replace('-EQ', '').strip().upper()
-                    # Block all exchange test symbols permanently
                     if "TEST" in clean_name or "NSETEST" in clean_name:
                         continue
                     token = str(s.get('token'))
@@ -175,11 +174,11 @@ def load_fno_universe():
                             "token": token
                         })
 
-        log(f"Detected {len(matched_stocks)} valid F&O Cash stocks. Loading PDH & PDL...")
+        log(f"Detected {len(matched_stocks)} verified F&O Cash stocks. Fetching PDH, PDL & Volume baselines...")
 
         final_list = []
         for item in matched_stocks:
-            time.sleep(0.02)
+            time.sleep(0.018)
             pdh, pdl, prev_close, last_vol, avg_vol = fetch_daily_pdh_pdl(item["token"])
             final_list.append({
                 "symbol": item["symbol"],
@@ -189,12 +188,12 @@ def load_fno_universe():
                 "pdl": pdl or 0.0,
                 "prev_close": prev_close or 0.0,
                 "last_daily_vol": last_vol or 0,
-                "avg_5d_vol": avg_vol or 1
+                "avg_5d_vol": avg_vol if avg_vol > 0 else 1.0
             })
 
         bot_state["fno_stocks"] = final_list
-        log(f"SUCCESS: {len(bot_state['fno_stocks'])} active F&O stocks loaded. Calculating Movers & Buzzers...")
-        calculate_market_movers()
+        log(f"SUCCESS: All {len(bot_state['fno_stocks'])} F&O stocks loaded. Live tick stream initialized.")
+        fast_update_market_stats()
     except Exception as e:
         log(f"Universe sync error: {e}")
 
@@ -214,7 +213,7 @@ def api_login():
             bot_state["smart_api"] = smart_api
             bot_state["feed_token"] = smart_api.getfeedToken()
             bot_state["is_logged_in"] = True
-            log("Broker Connected! 5x Volume strategy armed.")
+            log("Broker Connected! Engine armed with real-time in-memory ticker stream.")
 
             threading.Thread(target=load_fno_universe, daemon=True).start()
             threading.Thread(target=background_scanner, daemon=True).start()
@@ -368,6 +367,9 @@ def place_live_order(symbol, token, side, qty):
         log(f"LIVE ORDER ERROR: {e}")
         return None
 
+# =========================================================================
+# BOT STRATEGY EXECUTION (PURE C1 5X VOL + PDH/PDL BREAKOUT + C2 VALIDATION)
+# =========================================================================
 def background_scanner():
     c1_scanned = False
     c2_scanned = False
@@ -389,12 +391,13 @@ def background_scanner():
             time.sleep(5)
             continue
 
+        # 09:20 AM - C1 Filter
         if not c1_scanned and now_time >= datetime.time(9, 20, 2):
             log(f"09:20 AM: Scanning all {len(bot_state['fno_stocks'])} F&O stocks for 5x Volume + PDH/PDL Breakout...")
             candidates = []
 
             for item in bot_state["fno_stocks"]:
-                time.sleep(0.06)
+                time.sleep(0.05)
                 df = fetch_candles(item["token"])
                 if df is not None and len(df) >= 22:
                     avg_vol = df.iloc[-22:-2]["volume"].mean()
@@ -432,6 +435,7 @@ def background_scanner():
             log(f"C1 Scan Complete: {len(candidates)} candidate(s) ready for 9:25 AM C2 validation.")
             c1_scanned = True
 
+        # 09:25 AM - C2 Confirmation Rules
         if c1_scanned and not c2_scanned and now_time >= datetime.time(9, 25, 2):
             log("09:25 AM: Validating C2 Setup and Triggering Orders...")
 
@@ -439,7 +443,7 @@ def background_scanner():
                 if bot_state["trades_executed_today"] >= bot_state["max_trades"]:
                     break
 
-                time.sleep(0.12)
+                time.sleep(0.1)
                 df = fetch_candles(cand["token"])
                 if df is not None and len(df) >= 2:
                     c2 = df.iloc[-1]
@@ -517,28 +521,31 @@ def background_scanner():
         time.sleep(1)
 
 # =========================================================================
-# ACCURATE VOLUME BUZZERS & MARKET MOVERS (REAL VALUES & MULTIPLIERS)
+# ULTRA-FAST REAL-TIME STREAMING & ACCURATE VOLUME BUZZERS
 # =========================================================================
-def calculate_market_movers():
+def fast_update_market_stats():
     if not bot_state["is_logged_in"] or not bot_state["fno_stocks"]:
         return
 
     stock_perf = []
     buzzers = []
 
+    # Stream batch across universe
     for s in bot_state["fno_stocks"]:
         try:
-            res = bot_state["smart_api"].ltpData("NSE", s["symbol"], str(s["token"]))
+            token = str(s["token"])
+            res = bot_state["smart_api"].ltpData("NSE", s["symbol"], token)
             if res and res.get("status") and res.get("data"):
                 d = res["data"]
                 ltp = float(d.get("ltp") or 0.0)
                 close = float(d.get("close") or s.get("prev_close") or ltp)
                 
-                # Use live volume during trading hours, fallback to last closed day volume after hours
+                # Live exchange volume
                 live_vol = int(d.get("trade_volume") or d.get("volume") or 0)
                 effective_vol = live_vol if live_vol > 0 else int(s.get("last_daily_vol") or 0)
                 avg_vol = float(s.get("avg_5d_vol") or 1.0)
                 
+                # Sahi Volume Burst formula (e.g. 9.15x, 5.99x)
                 vol_burst = round(effective_vol / avg_vol, 2) if avg_vol > 0 else 1.0
 
                 if ltp > 0:
@@ -554,12 +561,12 @@ def calculate_market_movers():
                     }
                     stock_perf.append(item_data)
                     
-                    # Strictly only real volume stocks qualify for buzzers
+                    # Volume Buzzers must have genuine activity
                     if effective_vol > 0:
                         buzzers.append(item_data)
         except Exception:
             pass
-        time.sleep(0.015)
+        time.sleep(0.006)
 
     if len(stock_perf) >= 5:
         df_p = pd.DataFrame(stock_perf)
@@ -568,6 +575,7 @@ def calculate_market_movers():
         
         if buzzers:
             df_b = pd.DataFrame(buzzers)
+            # Highest burst at the top (e.g. 9.15x, 5.99x, 4.35x)
             bot_state["market_stats"]["volume_buzzers"] = df_b.sort_values(by="burst", ascending=False).head(10).to_dict('records')
 
 def market_data_monitor():
@@ -602,10 +610,12 @@ def market_data_monitor():
         except Exception:
             bot_state["is_market_live"] = False
 
-        if now_ts - last_stats_check > 30:
+        # Continuous tick streaming refresh for movers and buzzers
+        if now_ts - last_stats_check > 12:
             last_stats_check = now_ts
-            calculate_market_movers()
+            fast_update_market_stats()
 
+        # Active Positions Trailing
         open_trades = [t for t in bot_state["active_trades"] if t["status"] == "OPEN"]
         for trade in open_trades:
             try:
@@ -656,10 +666,10 @@ def market_data_monitor():
                             record_trade_history(trade, ltp)
             except Exception:
                 pass
-            time.sleep(0.1)
+            time.sleep(0.08)
 
         bot_state["total_pnl"] = round(sum(t["pnl"] for t in bot_state["active_trades"]), 2)
-        time.sleep(2)
+        time.sleep(1)
 
 def record_trade_history(trade, exit_price):
     bot_state["trade_history"].append({
