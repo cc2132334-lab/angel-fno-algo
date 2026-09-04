@@ -210,7 +210,7 @@ def api_login():
             bot_state["smart_api"] = smart_api
             bot_state["feed_token"] = smart_api.getfeedToken()
             bot_state["is_logged_in"] = True
-            log("Broker Connected! Engine armed with strict 09:25 candle close validation.")
+            log("Broker Connected! Engine armed with SL-M entry orders.")
 
             threading.Thread(target=load_fno_universe, daemon=True).start()
             threading.Thread(target=background_scanner, daemon=True).start()
@@ -257,7 +257,6 @@ def set_mode():
         return jsonify({"status": "success", "mode": mode})
     return jsonify({"status": "error"})
 
-# MANUAL SCANNER WITH INSTANT STOP FEATURE
 @app.route('/api/manual-5x-scan', methods=['POST'])
 def manual_5x_scan():
     if not bot_state.get("smart_api"):
@@ -362,7 +361,32 @@ def get_state():
         "trade_history": bot_state["trade_history"]
     })
 
-def place_live_order(symbol, token, side, qty):
+# =========================================================================
+# PLACE SL-M (STOPLOSS_MARKET) ORDER FUNCTION
+# =========================================================================
+def place_live_slm_order(symbol, token, side, qty, trigger_price):
+    try:
+        order_params = {
+            "variety": "STOPLOSS",
+            "tradingsymbol": symbol,
+            "symboltoken": str(token),
+            "transactiontype": side,
+            "exchange": "NSE",
+            "ordertype": "STOPLOSS_MARKET",
+            "producttype": "INTRADAY",
+            "duration": "DAY",
+            "price": "0",
+            "triggerprice": str(round(float(trigger_price), 2)),
+            "quantity": str(qty)
+        }
+        res = bot_state["smart_api"].placeOrder(order_params)
+        log(f"LIVE SL-M ORDER: {side} {qty} {symbol} Trigger@{trigger_price} | Res: {res}")
+        return res
+    except Exception as e:
+        log(f"LIVE SL-M ORDER ERROR: {e}")
+        return None
+
+def place_live_exit_order(symbol, token, side, qty):
     try:
         order_params = {
             "variety": "NORMAL",
@@ -375,15 +399,13 @@ def place_live_order(symbol, token, side, qty):
             "duration": "DAY",
             "quantity": str(qty)
         }
-        res = bot_state["smart_api"].placeOrder(order_params)
-        log(f"LIVE ORDER: {side} {qty} {symbol} | Res: {res}")
-        return res
+        return bot_state["smart_api"].placeOrder(order_params)
     except Exception as e:
-        log(f"LIVE ORDER ERROR: {e}")
+        log(f"LIVE EXIT ERROR: {e}")
         return None
 
 # =========================================================================
-# BOT EXECUTION ENGINE: STRICT 09:25 AM CANDLE CLOSE CONFIRMATION
+# BOT EXECUTION ENGINE: SL-M ORDERS ONLY
 # =========================================================================
 def background_scanner():
     c1_scanned = False
@@ -406,7 +428,7 @@ def background_scanner():
             time.sleep(5)
             continue
 
-        # 09:20 AM - C1 Filter on ALL F&O Stocks (Waits for 09:15-09:20 to fully freeze)
+        # 09:20 AM - C1 Filter
         if not c1_scanned and now_time >= datetime.time(9, 20, 2):
             log(f"09:20 AM: Scanning all {len(bot_state['fno_stocks'])} F&O stocks for 5x Volume + PDH/PDL Breakout...")
             candidates = []
@@ -416,7 +438,7 @@ def background_scanner():
                 df = fetch_candles(item["token"])
                 if df is not None and len(df) >= 22:
                     avg_vol = df.iloc[-22:-2]["volume"].mean()
-                    c1_candle = df.iloc[-2]  # Freeze 9:15 - 9:20 candle
+                    c1_candle = df.iloc[-2]
                     c1_vol = float(c1_candle["volume"])
                     c1_close = float(c1_candle["close"])
                     c1_high = float(c1_candle["high"])
@@ -444,15 +466,15 @@ def background_scanner():
                                 "pdl": pdl,
                                 "ratio": round(c1_vol / avg_vol, 2)
                             })
-                            log(f"Setup Qualified: {item['symbol']} ({round(c1_vol/avg_vol, 2)}x Vol) [{bias}]")
+                            log(f"Qualified: {item['symbol']} ({round(c1_vol/avg_vol, 2)}x Vol) [{bias}]")
 
             bot_state["c1_candidates"] = candidates
-            log(f"C1 Scan Complete: {len(candidates)} candidate(s). Waiting for 09:25:02 AM C2 CANDE CLOSE.")
+            log(f"C1 Scan Complete: {len(candidates)} candidate(s). Waiting for 09:25 AM C2 validation.")
             c1_scanned = True
 
-        # STRICT C2 VALIDATION (EXECUTES ONLY AFTER 09:25:02 WHEN C2 CANDLE IS COMPLETELY CLOSED)
+        # 09:25 AM - SL-M Trigger Order Placement
         if c1_scanned and not c2_scanned and now_time >= datetime.time(9, 25, 2):
-            log("09:25 AM: Validating 100% CLOSED C2 Candle confirmation...")
+            log("09:25 AM: Setting up SL-M Breakout Orders...")
 
             for cand in bot_state["c1_candidates"]:
                 if bot_state["trades_executed_today"] >= bot_state["max_trades"]:
@@ -461,7 +483,6 @@ def background_scanner():
                 time.sleep(0.08)
                 df = fetch_candles(cand["token"])
                 if df is not None and len(df) >= 2:
-                    # Index -1 represents the fully completed 09:20 - 09:25 candle
                     c2 = df.iloc[-1]
                     c2_high = float(c2["high"])
                     c2_low = float(c2["low"])
@@ -471,43 +492,39 @@ def background_scanner():
                     c1_l = cand["c1_low"]
 
                     side = None
-                    entry_price = 0.0
+                    slm_trigger = 0.0
                     sl = 0.0
 
                     if cand["bias"] == "BULLISH_PDH_BREAKOUT":
-                        # Case 1: C2 closes strictly ABOVE C1 High
                         if c2_close > c1_h:
                             side = "BUY"
-                            entry_price = c2_close
+                            slm_trigger = c2_high
                             sl = c2_low
-                        # Case 2: C2 is Inside Candle (Close is within C1 range)
                         elif c2_high <= c1_h and c2_low >= c1_l:
                             side = "BUY"
-                            entry_price = c1_h
+                            slm_trigger = c1_h
                             sl = c2_low
 
                     elif cand["bias"] == "BEARISH_PDL_BREAKDOWN":
-                        # Case 1: C2 closes strictly BELOW C1 Low
                         if c2_close < c1_l:
                             side = "SELL"
-                            entry_price = c2_close
+                            slm_trigger = c2_low
                             sl = c2_high
-                        # Case 2: C2 Inside Candle
                         elif c2_high <= c1_h and c2_low >= c1_l:
                             side = "SELL"
-                            entry_price = c1_l
+                            slm_trigger = c1_l
                             sl = c2_high
 
-                    if side:
-                        risk_pts = abs(entry_price - sl)
-                        qty = calculate_quantity(bot_state["risk_amount"], entry_price, sl)
+                    if side and slm_trigger > 0 and sl > 0:
+                        risk_pts = abs(slm_trigger - sl)
+                        qty = calculate_quantity(bot_state["risk_amount"], slm_trigger, sl)
                         target_mult = bot_state["rr_ratio"]
-                        final_target = round(entry_price + (target_mult * risk_pts) if side == "BUY" else entry_price - (target_mult * risk_pts), 2)
+                        final_target = round(slm_trigger + (target_mult * risk_pts) if side == "BUY" else slm_trigger - (target_mult * risk_pts), 2)
 
                         mode = bot_state["trading_mode"]
-                        status = "OPEN"
+                        status = "PENDING_TRIGGER"
                         if mode == "LIVE":
-                            res = place_live_order(cand["symbol"], cand["token"], side, qty)
+                            res = place_live_slm_order(cand["symbol"], cand["token"], side, qty, slm_trigger)
                             if not res:
                                 status = "FAILED"
 
@@ -516,8 +533,8 @@ def background_scanner():
                             "symbol": cand["symbol"],
                             "token": cand["token"],
                             "side": side,
-                            "trigger_price": entry_price,
-                            "entry": entry_price,
+                            "trigger_price": slm_trigger,
+                            "entry": slm_trigger,
                             "sl": sl,
                             "orig_sl": sl,
                             "target": final_target,
@@ -525,32 +542,25 @@ def background_scanner():
                             "qty": qty,
                             "remaining_qty": qty,
                             "half_booked": False,
-                            "ltp": entry_price,
+                            "ltp": slm_trigger,
                             "pnl": 0.0,
                             "status": status,
                             "mode": mode,
                             "time": get_ist_now().strftime("%I:%M:%S %p")
                         })
                         bot_state["trades_executed_today"] += 1
-                        log(f"Trade Entered [{mode}]: {side} {cand['symbol']} Entry:{entry_price} SL:{sl} Target:{final_target}")
+                        log(f"SL-M Order Placed [{mode}]: {side} {cand['symbol']} Qty:{qty} Trigger@{slm_trigger} SL:{sl} Target:{final_target}")
 
             c2_scanned = True
 
         time.sleep(1)
 
-# =========================================================================
-# REAL-TIME MARKET ANALYTICS (MATCHES ANGEL ONE OFFICIAL VOLUME BUZZERS)
-# =========================================================================
 def fetch_realtime_market_analytics():
     if not bot_state["is_logged_in"]:
         return
 
-    # Direct Angel SmartAPI Market Analytics for Volume Buzzers
     try:
-        buzzers_payload = {
-            "datatype": "VOLUME_BUZZERS",
-            "expirytype": "NEAR"
-        }
+        buzzers_payload = {"datatype": "VOLUME_BUZZERS", "expirytype": "NEAR"}
         headers = {
             "Authorization": f"Bearer {bot_state['feed_token']}",
             "Content-Type": "application/json",
@@ -579,7 +589,6 @@ def fetch_realtime_market_analytics():
     except Exception:
         pass
 
-    # Dynamic Fallback: Calculate direct from Live Ticks
     stock_perf = []
     for s in bot_state["fno_stocks"][:50]:
         try:
@@ -643,14 +652,26 @@ def market_data_monitor():
             last_stats_check = now_ts
             fetch_realtime_market_analytics()
 
-        # Active Positions Trailing
-        open_trades = [t for t in bot_state["active_trades"] if t["status"] == "OPEN"]
+        # Monitoring Open / Triggered Positions
+        open_trades = [t for t in bot_state["active_trades"] if t["status"] in ["OPEN", "PENDING_TRIGGER"]]
         for trade in open_trades:
             try:
                 ltp_data = bot_state["smart_api"].ltpData("NSE", trade["symbol"], str(trade["token"]))
                 if ltp_data and ltp_data.get("data"):
                     ltp = float(ltp_data["data"]["ltp"])
                     trade["ltp"] = ltp
+
+                    # Check Trigger Hit
+                    if trade["status"] == "PENDING_TRIGGER":
+                        if trade["side"] == "BUY" and ltp >= trade["trigger_price"]:
+                            trade["status"] = "OPEN"
+                            log(f"SL-M Triggered & Filled: BUY {trade['symbol']} at ₹{ltp}")
+                        elif trade["side"] == "SELL" and ltp <= trade["trigger_price"]:
+                            trade["status"] = "OPEN"
+                            log(f"SL-M Triggered & Filled: SELL {trade['symbol']} at ₹{ltp}")
+                        continue
+
+                    # Trailing & Target Monitoring
                     risk_unit = abs(trade["entry"] - trade["orig_sl"])
 
                     if trade["side"] == "BUY":
@@ -665,12 +686,12 @@ def market_data_monitor():
                         if ltp <= trade["sl"]:
                             trade["status"] = "SL / TRAIL HIT"
                             if trade["mode"] == "LIVE":
-                                place_live_order(trade["symbol"], trade["token"], "SELL", trade["remaining_qty"])
+                                place_live_exit_order(trade["symbol"], trade["token"], "SELL", trade["remaining_qty"])
                             record_trade_history(trade, ltp)
                         elif ltp >= trade["target"]:
                             trade["status"] = "FULL TARGET HIT"
                             if trade["mode"] == "LIVE":
-                                place_live_order(trade["symbol"], trade["token"], "SELL", trade["remaining_qty"])
+                                place_live_exit_order(trade["symbol"], trade["token"], "SELL", trade["remaining_qty"])
                             record_trade_history(trade, ltp)
 
                     else:
@@ -685,18 +706,18 @@ def market_data_monitor():
                         if ltp >= trade["sl"]:
                             trade["status"] = "SL / TRAIL HIT"
                             if trade["mode"] == "LIVE":
-                                place_live_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
+                                place_live_exit_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
                             record_trade_history(trade, ltp)
                         elif ltp <= trade["target"]:
                             trade["status"] = "FULL TARGET HIT"
                             if trade["mode"] == "LIVE":
-                                place_live_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
+                                place_live_exit_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
                             record_trade_history(trade, ltp)
             except Exception:
                 pass
             time.sleep(0.08)
 
-        bot_state["total_pnl"] = round(sum(t["pnl"] for t in bot_state["active_trades"]), 2)
+        bot_state["total_pnl"] = round(sum(t["pnl"] for t in bot_state["active_trades"] if t["status"] == "OPEN"), 2)
         time.sleep(1)
 
 def record_trade_history(trade, exit_price):
