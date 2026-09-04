@@ -88,10 +88,7 @@
 <body data-theme="light">
 
     <div class="header-bar">
-        <div>
-            <h1 style="font-size: 1.05rem; font-weight: 800;">⚡ ALGO PRO TERMINAL</h1>
-            <span id="user-display-badge" style="font-size: 0.75rem; color: var(--accent); font-weight: bold;"></span>
-        </div>
+        <h1 style="font-size: 1.05rem; font-weight: 800;">⚡ ALGO PRO TERMINAL</h1>
         <button class="theme-btn" onclick="toggleTheme()" id="theme-btn">🌙 Dark Mode</button>
     </div>
 
@@ -103,12 +100,12 @@
         <div class="clock-time" id="live-clock">--:--:-- --</div>
     </div>
 
-    <!-- 1. LOGIN CARD (Multi-User) -->
+    <!-- 1. LOGIN CARD -->
     <div class="card" id="login-card" style="border: 2px solid var(--accent); padding: 18px;">
         <h2 style="font-size: 1.05rem; margin-bottom: 8px; text-align: center;">🔐 Connect Angel One Broker</h2>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px; text-align: center;">Har user apna alag account login karke chalaye.</p>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px; text-align: center;">Terminal access karne ke liye broker connect karein.</p>
         <input type="text" id="api_key" placeholder="SmartAPI Key">
-        <input type="text" id="client_code" placeholder="Client ID (e.g. TTKG1005)">
+        <input type="text" id="client_code" placeholder="Client ID">
         <input type="password" id="pin" placeholder="MPIN">
         <input type="password" id="totp_secret" placeholder="TOTP Secret Key">
         <button id="login-btn" style="background: var(--accent); color: white; margin-top: 12px; padding: 11px;" onclick="login()">Connect Broker & Unlock Terminal</button>
@@ -232,7 +229,7 @@
             </div>
         </div>
 
-        <!-- TOP OI STATS -->
+        <!-- TOP OI STATS (WATCH ONLY) -->
         <div class="card">
             <h2>📈 Top Open Interest Movers (Watch Only)</h2>
             <div class="tabs" id="oi-tabs">
@@ -263,8 +260,8 @@
 
             <div id="pending-view" style="display: none;">
                 <table>
-                    <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Type</th><th>Trigger/Px</th><th>Inval Level</th><th>Qty</th><th>Status</th></tr></thead>
-                    <tbody id="pending-body"><tr><td colspan="8" style="text-align:center; color: var(--text-muted);">No pending orders</td></tr></tbody>
+                    <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>SL-M Trigger</th><th>Inval Level</th><th>Qty</th><th>Status</th></tr></thead>
+                    <tbody id="pending-body"><tr><td colspan="7" style="text-align:center; color: var(--text-muted);">No pending SL-M orders</td></tr></tbody>
                 </table>
             </div>
 
@@ -288,9 +285,26 @@
         let currentOITab = 'gainers';
         let isEngineRunning = true;
         let cachedState = null;
-        let currentClientCode = "";
+        let settingsRestored = false;
 
         document.getElementById('scan-date').value = new Date().toISOString().split('T')[0];
+
+        function restoreLocalSettings() {
+            try {
+                const saved = JSON.parse(localStorage.getItem('bot_settings') || '{}');
+                if (saved.max_trades) document.getElementById('max-trades').value = saved.max_trades;
+                if (saved.cutoff_time) document.getElementById('cutoff-time').value = saved.cutoff_time;
+                if (saved.rr_ratio) {
+                    document.getElementById('rr-slider').value = saved.rr_ratio;
+                    updateRR(saved.rr_ratio);
+                }
+                if (saved.risk_amount) {
+                    document.getElementById('risk-slider').value = saved.risk_amount;
+                    updateRisk(saved.risk_amount);
+                }
+            } catch(e) {}
+        }
+        restoreLocalSettings();
 
         function updateLiveClock() {
             const now = new Date();
@@ -323,6 +337,7 @@
                 rr_ratio: document.getElementById('rr-slider').value,
                 risk_amount: document.getElementById('risk-slider').value
             };
+            localStorage.setItem('bot_settings', JSON.stringify(payload));
             await fetch('/api/update-settings', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -388,10 +403,9 @@
         }
 
         async function login() {
-            const clientCodeVal = document.getElementById('client_code').value.trim().toUpperCase();
             const payload = {
                 api_key: document.getElementById('api_key').value.trim(),
-                client_code: clientCodeVal,
+                client_code: document.getElementById('client_code').value.trim(),
                 pin: document.getElementById('pin').value.trim(),
                 totp_secret: document.getElementById('totp_secret').value.trim()
             };
@@ -409,8 +423,6 @@
             btn.disabled = false;
 
             if(data.status === 'success') {
-                currentClientCode = clientCodeVal;
-                document.getElementById('user-display-badge').innerText = `[Account: ${currentClientCode}]`;
                 document.getElementById('login-card').style.display = 'none';
                 document.getElementById('main-terminal').style.display = 'block';
                 syncSettings();
@@ -507,7 +519,7 @@
             let list = (currentOITab === 'gainers') ? (pool.top_oi_gainers || []) : (pool.top_oi_losers || []);
 
             if(!list || list.length === 0) {
-                document.getElementById('oi-body').innerHTML = `<tr><td colspan="4" style="text-align:center; color:var(--text-muted);">Fetching live Open Interest data...</td></tr>`;
+                document.getElementById('oi-body').innerHTML = `<tr><td colspan="4" style="text-align:center; color:var(--text-muted);">Loading live Open Interest data...</td></tr>`;
                 return;
             }
 
@@ -529,7 +541,7 @@
             if(!cachedState) return;
             const pendings = cachedState.pending_orders || [];
             if(pendings.length === 0) {
-                document.getElementById('pending-body').innerHTML = `<tr><td colspan="8" style="text-align:center; color:var(--text-muted);">No pending orders</td></tr>`;
+                document.getElementById('pending-body').innerHTML = `<tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No pending SL-M orders</td></tr>`;
                 return;
             }
             let html = '';
@@ -537,14 +549,13 @@
                 const sideClass = p.side === 'BUY' ? 'tag-buy' : 'tag-sell';
                 const invalTxt = p.side === 'BUY' ? `< ₹${p.c1_low}` : `> ₹${p.c1_high}`;
                 let statusBadge = `<span class="tag-pending">${p.status}</span>`;
-                if(p.status === 'CANCELLED_INVALID') statusBadge = `<span class="tag-invalid">INVALID</span>`;
+                if(p.status === 'CANCELLED_INVALID') statusBadge = `<span class="tag-invalid">INVALID (BREAK)</span>`;
                 if(p.status === 'TRIGGERED') statusBadge = `<span class="tag-buy">FILLED</span>`;
 
                 html += `<tr>
                     <td><small style="color:var(--text-muted)">${p.time}</small></td>
                     <td><b>${p.symbol}</b></td>
                     <td><span class="${sideClass}">${p.side}</span></td>
-                    <td><small><b>${p.order_type || 'SL-M'}</b></small></td>
                     <td>₹${p.trigger_price}</td>
                     <td style="color:#ef4444; font-weight:bold;">${invalTxt}</td>
                     <td>${p.qty}</td>
@@ -569,66 +580,23 @@
                 const data = await res.json();
                 cachedState = data;
 
-                if(data.logged_in) {
-                    if(!currentClientCode && data.client_code) {
-                        currentClientCode = data.client_code;
-                        document.getElementById('user-display-badge').innerText = `[Account: ${currentClientCode}]`;
-                    }
+                if(data.logged_in || data.is_logged_in || data.broker_connected) {
                     document.getElementById('login-card').style.display = 'none';
                     document.getElementById('main-terminal').style.display = 'block';
+                }
 
-                    document.getElementById('system-status').innerText = data.status;
-
-                    isEngineRunning = data.engine_running;
-                    updateEngineButtonUI(data.engine_running);
-
-                    const pnlElem = document.getElementById('pnl-display');
-                    pnlElem.innerText = (data.total_pnl >= 0 ? '+₹' : '-₹') + Math.abs(data.total_pnl);
-                    pnlElem.style.color = data.total_pnl >= 0 ? 'var(--up)' : 'var(--down)';
-
-                    if(data.active_trades && data.active_trades.length > 0) {
-                        let html = '';
-                        data.active_trades.forEach(t => {
-                            const tag = t.side === 'BUY' ? 'tag-buy' : 'tag-sell';
-                            const pnlColor = t.pnl >= 0 ? 'var(--up)' : 'var(--down)';
-                            html += `<tr>
-                                <td><b>${t.symbol}</b></td>
-                                <td><span class="${tag}">${t.side}</span></td>
-                                <td>${t.entry}</td>
-                                <td>${t.sl}</td>
-                                <td>${t.remaining_qty}</td>
-                                <td style="color:${pnlColor}; font-weight:bold;">${t.pnl}</td>
-                                <td><b>${t.status}</b></td>
-                            </tr>`;
-                        });
-                        document.getElementById('active-body').innerHTML = html;
-                    } else {
-                        document.getElementById('active-body').innerHTML = `<tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No open positions</td></tr>`;
+                if(!settingsRestored && data) {
+                    if(data.max_trades) document.getElementById('max-trades').value = data.max_trades;
+                    if(data.cutoff_time) document.getElementById('cutoff-time').value = data.cutoff_time;
+                    if(data.rr_ratio) {
+                        document.getElementById('rr-slider').value = data.rr_ratio;
+                        updateRR(data.rr_ratio);
                     }
-
-                    if(document.getElementById('pending-view').style.display === 'block') {
-                        renderPending();
+                    if(data.risk_amount) {
+                        document.getElementById('risk-slider').value = data.risk_amount;
+                        updateRisk(data.risk_amount);
                     }
-
-                    if(data.trade_history && data.trade_history.length > 0) {
-                        let histHtml = '';
-                        data.trade_history.forEach(h => {
-                            const resColor = h.pnl >= 0 ? 'var(--up)' : 'var(--down)';
-                            histHtml += `<tr>
-                                <td><small style="color:var(--text-muted)">${h.time}</small></td>
-                                <td><b>${h.symbol}</b></td>
-                                <td>${h.side}</td>
-                                <td>${h.entry} → ${h.exit}</td>
-                                <td style="color:${resColor}; font-weight:bold;">${h.pnl}</td>
-                                <td><b>${h.status}</b></td>
-                            </tr>`;
-                        });
-                        document.getElementById('history-body').innerHTML = histHtml;
-                    }
-
-                    if(document.getElementById('logs-view').style.display === 'block') {
-                        renderLogs();
-                    }
+                    settingsRestored = true;
                 }
 
                 const dot = document.getElementById('mkt-dot');
@@ -642,6 +610,11 @@
                     text.innerText = "MARKET CLOSED";
                     text.style.color = "#ef4444";
                 }
+
+                document.getElementById('system-status').innerText = data.status;
+
+                isEngineRunning = data.engine_running;
+                updateEngineButtonUI(data.engine_running);
 
                 if(data.market_indices) {
                     const n = data.market_indices.NIFTY;
@@ -662,7 +635,53 @@
                     }
                 }
 
+                const pnlElem = document.getElementById('pnl-display');
+                pnlElem.innerText = (data.total_pnl >= 0 ? '+₹' : '-₹') + Math.abs(data.total_pnl);
+                pnlElem.style.color = data.total_pnl >= 0 ? 'var(--up)' : 'var(--down)';
+
                 renderOIStats();
+
+                if(data.active_trades && data.active_trades.length > 0) {
+                    let html = '';
+                    data.active_trades.forEach(t => {
+                        const tag = t.side === 'BUY' ? 'tag-buy' : 'tag-sell';
+                        const pnlColor = t.pnl >= 0 ? 'var(--up)' : 'var(--down)';
+                        html += `<tr>
+                            <td><b>${t.symbol}</b></td>
+                            <td><span class="${tag}">${t.side}</span></td>
+                            <td>${t.entry}</td>
+                            <td>${t.sl}</td>
+                            <td>${t.remaining_qty}</td>
+                            <td style="color:${pnlColor}; font-weight:bold;">${t.pnl}</td>
+                            <td><b>${t.status}</b></td>
+                        </tr>`;
+                    });
+                    document.getElementById('active-body').innerHTML = html;
+                }
+
+                if(document.getElementById('pending-view').style.display === 'block') {
+                    renderPending();
+                }
+
+                if(data.trade_history && data.trade_history.length > 0) {
+                    let histHtml = '';
+                    data.trade_history.forEach(h => {
+                        const resColor = h.pnl >= 0 ? 'var(--up)' : 'var(--down)';
+                        histHtml += `<tr>
+                            <td><small style="color:var(--text-muted)">${h.time}</small></td>
+                            <td><b>${h.symbol}</b></td>
+                            <td>${h.side}</td>
+                            <td>${h.entry} → ${h.exit}</td>
+                            <td style="color:${resColor}; font-weight:bold;">${h.pnl}</td>
+                            <td><b>${h.status}</b></td>
+                        </tr>`;
+                    });
+                    document.getElementById('history-body').innerHTML = histHtml;
+                }
+
+                if(document.getElementById('logs-view').style.display === 'block') {
+                    renderLogs();
+                }
 
             } catch(e) {}
         }
