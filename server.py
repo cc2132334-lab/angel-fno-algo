@@ -70,7 +70,8 @@ shared_market = {
         "top_oi_losers": []
     },
     "c1_candidates": [],
-    "primary_api": None
+    "primary_api": None,
+    "universe_loaded": False
 }
 
 user_sessions = {}
@@ -173,9 +174,8 @@ def load_fno_universe(api_instance):
 
         broadcast_log(f"Verified {len(matched_stocks)} F&O Cash stocks. Loading daily PDH/PDL...")
 
-        # Fast parallel PDH/PDL fetch with non-blocking sleep
         for item in matched_stocks:
-            time.sleep(0.01)
+            time.sleep(0.015)
             try:
                 now = get_ist_now()
                 from_date = (now - datetime.timedelta(days=10)).strftime("%Y-%m-%d 09:15")
@@ -197,6 +197,7 @@ def load_fno_universe(api_instance):
                 pass
 
         shared_market["fno_stocks"] = matched_stocks
+        shared_market["universe_loaded"] = True
         broadcast_log(f"SUCCESS: {len(shared_market['fno_stocks'])} pure F&O Cash stocks loaded. Ready for scan.")
         update_oi_stats()
     except Exception as e:
@@ -250,7 +251,9 @@ def api_login():
             session["client_code"] = client_code
             shared_market["primary_api"] = smart_api
 
-            # ALWAYS trigger universe load on login if empty
+            # Instantly fetch Index Rates on Login
+            fetch_indices_now(smart_api)
+
             if len(shared_market["fno_stocks"]) < 50:
                 threading.Thread(target=load_fno_universe, args=(smart_api,), daemon=True).start()
 
@@ -330,7 +333,7 @@ def manual_5x_scan():
 
     stocks_to_scan = shared_market["fno_stocks"]
     if not stocks_to_scan:
-        return jsonify({"status": "error", "message": "F&O universe loading, wait 10 seconds..."})
+        return jsonify({"status": "error", "message": "F&O universe loading, retry in 5 seconds..."})
 
     filtered_results = []
     for item in stocks_to_scan:
@@ -460,8 +463,31 @@ def cancel_live_order(api, order_id, variety="STOPLOSS"):
     except Exception:
         return False
 
+# FAST INDEPENDENT INDEX FETCHER
+def fetch_indices_now(api):
+    try:
+        # NIFTY 50 Token: 99926000 (NSE)
+        n_res = api.ltpData("NSE", "NIFTY", "99926000")
+        if n_res and n_res.get("data"):
+            ltp = float(n_res["data"]["ltp"])
+            close = float(n_res["data"].get("close", ltp))
+            change = round(ltp - close, 2)
+            pchange = round((change / close) * 100, 2) if close > 0 else 0.0
+            shared_market["market_indices"]["NIFTY"] = {"ltp": ltp, "change": change, "pchange": pchange}
+        
+        # SENSEX Token: 99919000 (BSE)
+        s_res = api.ltpData("BSE", "SENSEX", "99919000")
+        if s_res and s_res.get("data"):
+            ltp = float(s_res["data"]["ltp"])
+            close = float(s_res["data"].get("close", ltp))
+            change = round(ltp - close, 2)
+            pchange = round((change / close) * 100, 2) if close > 0 else 0.0
+            shared_market["market_indices"]["SENSEX"] = {"ltp": ltp, "change": change, "pchange": pchange}
+    except Exception:
+        pass
+
 # =========================================================================
-# CORE BACKGROUND STRATEGY & MONITOR
+# BACKGROUND ENGINE (SCANNER + DEDICATED INDEX THREAD)
 # =========================================================================
 def background_scanner():
     c1_scanned = False
@@ -764,24 +790,8 @@ def market_data_monitor():
         is_time_window = (datetime.time(9, 15) <= now_ist.time() <= datetime.time(15, 30))
         shared_market["is_market_live"] = (is_weekday and is_time_window)
 
-        try:
-            n_res = api.ltpData("NSE", "NIFTY", "99926000")
-            if n_res and n_res.get("data"):
-                ltp = float(n_res["data"]["ltp"])
-                close = float(n_res["data"].get("close", ltp))
-                change = round(ltp - close, 2)
-                pchange = round((change / close) * 100, 2) if close > 0 else 0.0
-                shared_market["market_indices"]["NIFTY"] = {"ltp": ltp, "change": change, "pchange": pchange}
-
-            s_res = api.ltpData("BSE", "SENSEX", "99919000")
-            if s_res and s_res.get("data"):
-                ltp = float(s_res["data"]["ltp"])
-                close = float(s_res["data"].get("close", ltp))
-                change = round(ltp - close, 2)
-                pchange = round((change / close) * 100, 2) if close > 0 else 0.0
-                shared_market["market_indices"]["SENSEX"] = {"ltp": ltp, "change": change, "pchange": pchange}
-        except Exception:
-            pass
+        # Always update Indices
+        fetch_indices_now(api)
 
         if now_ts - last_stats_check > 25:
             last_stats_check = now_ts
@@ -845,7 +855,7 @@ def market_data_monitor():
 
             u["total_pnl"] = round(sum(t["pnl"] for t in u["active_trades"] if t["status"] == "OPEN"), 2)
 
-        time.sleep(1)
+        time.sleep(1.5)
 
 def record_user_trade_history(user_obj, trade, exit_price):
     user_obj["trade_history"].append({
@@ -858,7 +868,6 @@ def record_user_trade_history(user_obj, trade, exit_price):
         "status": trade["status"]
     })
 
-# Start daemon threads once at boot
 threading.Thread(target=background_scanner, daemon=True).start()
 threading.Thread(target=market_data_monitor, daemon=True).start()
 
