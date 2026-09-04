@@ -237,7 +237,7 @@
             </div>
             <table>
                 <thead><tr><th>Symbol</th><th>LTP</th><th>% Change</th></tr></thead>
-                <tbody id="stats-body"><tr><td colspan="3" style="text-align:center; color: var(--text-muted);">Loading real market data...</td></tr></tbody>
+                <tbody id="stats-body"><tr><td colspan="3" style="text-align:center; color: var(--text-muted);">Streaming live tick data...</td></tr></tbody>
             </table>
         </div>
 
@@ -499,7 +499,7 @@
             else if(currentStatsTab === 'volume') { list = pool.volume_buzzers || []; isVol = true; }
 
             if(!list || list.length === 0) {
-                document.getElementById('stats-body').innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Loading real market data...</td></tr>`;
+                document.getElementById('stats-body').innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Streaming live tick data...</td></tr>`;
                 return;
             }
 
@@ -508,7 +508,6 @@
                 const cls = item.pchange >= 0 ? 'up-text' : 'down-text';
                 const sign = item.pchange >= 0 ? '+' : '';
                 
-                // Real Volume Burst multiplier rendering (e.g. 9.15x / Vol: 1,200,000)
                 let extra = '';
                 if (isVol) {
                     const burstTag = item.burst ? `<span class="highlight-vol">${item.burst}x</span>` : '';
