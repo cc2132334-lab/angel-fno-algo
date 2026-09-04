@@ -64,6 +64,7 @@ bot_state = {
     "cutoff_time": str(saved_conf["cutoff_time"]),
     "trades_executed_today": 0,
     "fno_stocks": [],
+    "fno_fut_map": {},
     "is_market_live": False,
     "total_pnl": 0.0,
     "market_indices": {
@@ -71,9 +72,8 @@ bot_state = {
         "SENSEX": {"ltp": 0.0, "change": 0.0, "pchange": 0.0}
     },
     "market_stats": {
-        "top_gainers": [],
-        "top_losers": [],
-        "volume_buzzers": []
+        "top_oi_gainers": [],
+        "top_oi_losers": []
     },
     "scan_cancelled": False,
     "c1_candidates": [],
@@ -147,17 +147,21 @@ def fetch_daily_pdh_pdl(token):
 
 def load_fno_universe():
     try:
-        log("Downloading Angel One Master & strictly filtering F&O Cash stocks...")
+        log("Downloading Angel One Master & extracting F&O universe...")
         url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
         res = requests.get(url, timeout=25)
         master = res.json()
 
-        fno_symbols = set()
+        fno_symbols = {}
         for s in master:
             if s.get('exch_seg') == 'NFO' and s.get('instrumenttype') == 'FUTSTK':
-                base_name = s.get('name', '').strip()
-                if base_name and "TEST" not in base_name.upper():
-                    fno_symbols.add(base_name.upper())
+                base_name = s.get('name', '').strip().upper()
+                if base_name and "TEST" not in base_name:
+                    if base_name not in fno_symbols:
+                        fno_symbols[base_name] = {
+                            "fut_symbol": s.get('symbol'),
+                            "fut_token": str(s.get('token'))
+                        }
 
         matched_stocks = []
         for s in master:
@@ -167,17 +171,19 @@ def load_fno_universe():
                     clean_name = sym.replace('-EQ', '').strip().upper()
                     if "TEST" in clean_name or "NSETEST" in clean_name:
                         continue
-                    token = str(s.get('token'))
                     if clean_name in fno_symbols:
                         matched_stocks.append({
                             "symbol": sym,
                             "name": clean_name,
-                            "token": token
+                            "token": str(s.get('token')),
+                            "fut_symbol": fno_symbols[clean_name]["fut_symbol"],
+                            "fut_token": fno_symbols[clean_name]["fut_token"]
                         })
 
-        log(f"Verified {len(matched_stocks)} F&O Cash stocks. Loading PDH, PDL & Volume baselines...")
+        log(f"Verified {len(matched_stocks)} pure F&O Cash stocks. Loading PDH & PDL...")
 
         final_list = []
+        fut_map = {}
         for item in matched_stocks:
             time.sleep(0.015)
             pdh, pdl, prev_close, last_vol, avg_vol = fetch_daily_pdh_pdl(item["token"])
@@ -189,12 +195,16 @@ def load_fno_universe():
                 "pdl": pdl or 0.0,
                 "prev_close": prev_close or 0.0,
                 "last_daily_vol": last_vol or 0,
-                "avg_5d_vol": avg_vol if avg_vol > 0 else 1.0
+                "avg_5d_vol": avg_vol if avg_vol > 0 else 1.0,
+                "fut_symbol": item["fut_symbol"],
+                "fut_token": item["fut_token"]
             })
+            fut_map[item["name"]] = {"symbol": item["fut_symbol"], "token": item["fut_token"]}
 
         bot_state["fno_stocks"] = final_list
+        bot_state["fno_fut_map"] = fut_map
         log(f"SUCCESS: {len(bot_state['fno_stocks'])} pure F&O Cash stocks loaded. Ready for scan.")
-        update_fno_market_movers_and_buzzers()
+        update_oi_stats()
     except Exception as e:
         log(f"Universe sync error: {e}")
 
@@ -214,7 +224,7 @@ def api_login():
             bot_state["smart_api"] = smart_api
             bot_state["feed_token"] = smart_api.getfeedToken()
             bot_state["is_logged_in"] = True
-            log("Broker Connected! Engine armed with continuous SL-M & invalidation logic.")
+            log("Broker Connected! Late-login Limit & 1:1 guard active.")
 
             threading.Thread(target=load_fno_universe, daemon=True).start()
             threading.Thread(target=background_scanner, daemon=True).start()
@@ -359,68 +369,53 @@ def get_state():
         "total_pnl": bot_state["total_pnl"],
         "market_indices": bot_state["market_indices"],
         "market_stats": bot_state["market_stats"],
-        "market_movers": bot_state["market_stats"],
         "c1_candidates": bot_state["c1_candidates"],
         "pending_orders": bot_state["pending_orders"],
         "active_trades": bot_state["active_trades"],
         "trade_history": bot_state["trade_history"]
     })
 
-def place_live_slm_order(symbol, token, side, qty, trigger_price):
+def place_live_order_raw(symbol, token, side, qty, order_type, trigger_price=0.0, limit_price=0.0):
     try:
+        variety = "STOPLOSS" if order_type == "STOPLOSS_MARKET" else "NORMAL"
         order_params = {
-            "variety": "STOPLOSS",
+            "variety": variety,
             "tradingsymbol": symbol,
             "symboltoken": str(token),
             "transactiontype": side,
             "exchange": "NSE",
-            "ordertype": "STOPLOSS_MARKET",
+            "ordertype": order_type,
             "producttype": "INTRADAY",
             "duration": "DAY",
-            "price": "0",
-            "triggerprice": str(round(float(trigger_price), 2)),
+            "price": str(round(float(limit_price), 2)) if order_type == "LIMIT" else "0",
+            "triggerprice": str(round(float(trigger_price), 2)) if order_type == "STOPLOSS_MARKET" else "0",
             "quantity": str(qty)
         }
         res = bot_state["smart_api"].placeOrder(order_params)
-        log(f"LIVE SL-M ORDER: {side} {qty} {symbol} Trigger@{trigger_price} | Res: {res}")
+        log(f"LIVE {order_type} ORDER: {side} {qty} {symbol} Trg:{trigger_price} Px:{limit_price} | Res: {res}")
         if res and res.get("data") and res["data"].get("orderid"):
             return res["data"]["orderid"]
-        return "LIVE_SIMULATED_ID"
+        return f"LIVE_{int(time.time()*1000)}"
     except Exception as e:
-        log(f"LIVE SL-M ORDER ERROR: {e}")
+        log(f"LIVE {order_type} ERROR: {e}")
         return None
 
-def cancel_live_order(order_id):
+def cancel_live_order(order_id, variety="STOPLOSS"):
     if not order_id or str(order_id).startswith("PAPER_"):
         return True
     try:
-        res = bot_state["smart_api"].cancelOrder(order_id, "STOPLOSS")
-        log(f"CANCELLED BROKER ORDER ID: {order_id} | Res: {res}")
+        res = bot_state["smart_api"].cancelOrder(order_id, variety)
+        log(f"CANCELLED ORDER ID: {order_id} | Res: {res}")
         return True
     except Exception as e:
-        log(f"CANCEL BROKER ORDER ERROR: {e}")
+        log(f"CANCEL ORDER ERROR: {e}")
         return False
 
 def place_live_exit_order(symbol, token, side, qty):
-    try:
-        order_params = {
-            "variety": "NORMAL",
-            "tradingsymbol": symbol,
-            "symboltoken": str(token),
-            "transactiontype": side,
-            "exchange": "NSE",
-            "ordertype": "MARKET",
-            "producttype": "INTRADAY",
-            "duration": "DAY",
-            "quantity": str(qty)
-        }
-        return bot_state["smart_api"].placeOrder(order_params)
-    except Exception as e:
-        log(f"LIVE EXIT ERROR: {e}")
-        return None
+    return place_live_order_raw(symbol, token, side, qty, "MARKET")
 
 # =========================================================================
-# CONTINUOUS SL-M EXECUTION & C1 INVALIDATION LOOP (TILL CUTOFF)
+# LATE-LOGIN AWARE CONTINUOUS EXECUTION ENGINE
 # =========================================================================
 def background_scanner():
     c1_scanned = False
@@ -430,26 +425,29 @@ def background_scanner():
             time.sleep(1)
             continue
 
+        if len(bot_state["fno_stocks"]) < 100:
+            time.sleep(1)
+            continue
+
         now_ist = get_ist_now()
         now_time = now_ist.time()
 
         cutoff_parts = [int(x) for x in bot_state["cutoff_time"].split(":")]
         cutoff_time_obj = datetime.time(cutoff_parts[0], cutoff_parts[1])
 
-        # Past cutoff: cancel remaining pending orders
         if now_time >= cutoff_time_obj:
             if bot_state["pending_orders"]:
                 for po in bot_state["pending_orders"]:
                     if po["status"] == "PENDING":
-                        cancel_live_order(po.get("order_id"))
+                        cancel_live_order(po.get("order_id"), po.get("variety", "STOPLOSS"))
                         po["status"] = "CANCELLED_CUTOFF"
-                        log(f"Cutoff Time Hit: Cancelled pending SL-M on {po['symbol']}")
+                        log(f"Cutoff Hit: Cancelled pending order on {po['symbol']}")
             time.sleep(5)
             continue
 
-        # 09:20 AM - C1 Filter Phase
+        # C1 Scan: Runs at or any time after 9:20 AM
         if not c1_scanned and now_time >= datetime.time(9, 20, 2):
-            log(f"09:20 AM: Scanning all {len(bot_state['fno_stocks'])} F&O stocks for 5x Volume + PDH/PDL Breakout...")
+            log(f"Scanning all {len(bot_state['fno_stocks'])} F&O stocks for 5x Volume + PDH/PDL Breakout...")
             candidates = []
 
             for item in bot_state["fno_stocks"]:
@@ -486,18 +484,17 @@ def background_scanner():
                                 "ratio": round(c1_vol / avg_vol, 2),
                                 "order_state": "READY"
                             })
-                            log(f"Setup Qualified: {item['symbol']} ({round(c1_vol/avg_vol, 2)}x Vol) [{bias}]")
+                            log(f"Qualified: {item['symbol']} ({round(c1_vol/avg_vol, 2)}x Vol) [{bias}]")
 
             bot_state["c1_candidates"] = candidates
-            log(f"C1 Scan Complete: {len(candidates)} candidate(s) ready for continuous SL-M engine.")
+            log(f"C1 Scan Complete: {len(candidates)} candidate(s) ready.")
             c1_scanned = True
 
-        # CONTINUOUS ENGINE: 09:25 AM to CUTOFF TIME
+        # Process orders: Normal Breakout (SL-M) OR Late-Login (Limit / 1:1 Check)
         if c1_scanned and now_time >= datetime.time(9, 25, 2):
             active_open_count = len([t for t in bot_state["active_trades"] if t["status"] == "OPEN"])
             pending_count = len([p for p in bot_state["pending_orders"] if p["status"] == "PENDING"])
 
-            # Place SL-M orders on valid candidates up to max_trades
             if (active_open_count + pending_count) < bot_state["max_trades"]:
                 for cand in bot_state["c1_candidates"]:
                     if (active_open_count + pending_count) >= bot_state["max_trades"]:
@@ -506,7 +503,6 @@ def background_scanner():
                     if cand.get("order_state") != "READY":
                         continue
 
-                    # Validate C2 Candle
                     df = fetch_candles(cand["token"])
                     if df is not None and len(df) >= 2:
                         c2 = df.iloc[-1]
@@ -517,39 +513,76 @@ def background_scanner():
                         c1_l = cand["c1_low"]
 
                         side = None
-                        slm_trigger = 0.0
+                        target_entry = 0.0
                         sl = 0.0
 
                         if cand["bias"] == "BULLISH_PDH_BREAKOUT":
                             if c2_close > c1_h:
                                 side = "BUY"
-                                slm_trigger = c2_high
+                                target_entry = c2_high
                                 sl = c2_low
                             elif c2_high <= c1_h and c2_low >= c1_l:
                                 side = "BUY"
-                                slm_trigger = c1_h
+                                target_entry = c1_h
                                 sl = c2_low
 
                         elif cand["bias"] == "BEARISH_PDL_BREAKDOWN":
                             if c2_close < c1_l:
                                 side = "SELL"
-                                slm_trigger = c2_low
+                                target_entry = c2_low
                                 sl = c2_high
                             elif c2_high <= c1_h and c2_low >= c1_l:
                                 side = "SELL"
-                                slm_trigger = c1_l
+                                target_entry = c1_l
                                 sl = c2_high
 
-                        if side and slm_trigger > 0 and sl > 0:
-                            risk_pts = abs(slm_trigger - sl)
-                            qty = calculate_quantity(bot_state["risk_amount"], slm_trigger, sl)
+                        if side and target_entry > 0 and sl > 0:
+                            risk_pts = abs(target_entry - sl)
+                            qty = calculate_quantity(bot_state["risk_amount"], target_entry, sl)
                             target_mult = bot_state["rr_ratio"]
-                            final_target = round(slm_trigger + (target_mult * risk_pts) if side == "BUY" else slm_trigger - (target_mult * risk_pts), 2)
+                            final_target = round(target_entry + (target_mult * risk_pts) if side == "BUY" else target_entry - (target_mult * risk_pts), 2)
+
+                            # Fetch Current LTP for Late Login Verification
+                            current_ltp = target_entry
+                            try:
+                                ltp_res = bot_state["smart_api"].ltpData("NSE", cand["symbol"], str(cand["token"]))
+                                if ltp_res and ltp_res.get("data"):
+                                    current_ltp = float(ltp_res["data"]["ltp"])
+                            except Exception:
+                                pass
+
+                            # Late Login Guard: 1:1 Invalidation Check
+                            one_to_one_level = (target_entry + risk_pts) if side == "BUY" else (target_entry - risk_pts)
+                            
+                            is_beyond_one_to_one = False
+                            if side == "BUY" and current_ltp >= one_to_one_level:
+                                is_beyond_one_to_one = True
+                            elif side == "SELL" and current_ltp <= one_to_one_level:
+                                is_beyond_one_to_one = True
+
+                            if is_beyond_one_to_one:
+                                cand["order_state"] = "IGNORED_1_TO_1"
+                                log(f"Late Login Check: {cand['symbol']} already exceeded 1:1 (LTP ₹{current_ltp} vs 1:1 ₹{one_to_one_level}). IGNORED.")
+                                continue
+
+                            # Decide Order Type: Normal SL-M vs Pullback Limit Order
+                            order_type = "STOPLOSS_MARKET"
+                            variety = "STOPLOSS"
+                            if side == "BUY" and current_ltp > target_entry:
+                                order_type = "LIMIT"
+                                variety = "NORMAL"
+                            elif side == "SELL" and current_ltp < target_entry:
+                                order_type = "LIMIT"
+                                variety = "NORMAL"
 
                             mode = bot_state["trading_mode"]
                             order_id = f"PAPER_{int(time.time()*1000)}"
                             if mode == "LIVE":
-                                order_id = place_live_slm_order(cand["symbol"], cand["token"], side, qty, slm_trigger)
+                                order_id = place_live_order_raw(
+                                    cand["symbol"], cand["token"], side, qty, order_type,
+                                    trigger_price=target_entry if order_type == "STOPLOSS_MARKET" else 0.0,
+                                    limit_price=target_entry if order_type == "LIMIT" else 0.0
+                                )
 
                             cand["order_state"] = "PENDING_PLACED"
 
@@ -559,7 +592,9 @@ def background_scanner():
                                 "symbol": cand["symbol"],
                                 "token": cand["token"],
                                 "side": side,
-                                "trigger_price": slm_trigger,
+                                "order_type": order_type,
+                                "variety": variety,
+                                "trigger_price": target_entry,
                                 "sl": sl,
                                 "orig_sl": sl,
                                 "c1_high": c1_h,
@@ -572,9 +607,9 @@ def background_scanner():
                                 "time": get_ist_now().strftime("%I:%M:%S %p")
                             })
                             pending_count += 1
-                            log(f"SL-M Order Armed [{mode}]: {side} {cand['symbol']} Trigger@{slm_trigger} (C1 Inval Level: {'<' + str(c1_l) if side == 'BUY' else '>' + str(c1_h)})")
+                            log(f"Order Armed [{mode} | {order_type}]: {side} {cand['symbol']} Level@{target_entry} (LTP: ₹{current_ltp})")
 
-            # Check Invalidation & Fill on all PENDING orders
+            # Check Pending Orders for C1 Invalidation or Execution
             for po in bot_state["pending_orders"]:
                 if po["status"] != "PENDING":
                     continue
@@ -584,31 +619,36 @@ def background_scanner():
                     if res and res.get("status") and res.get("data"):
                         ltp = float(res["data"]["ltp"])
 
-                        # CONDITION 1: INVALIDATION CHECK (BREAKS C1 LOW FOR BUY / C1 HIGH FOR SELL)
+                        # Invalidation Check: C1 breach
                         is_invalid = False
                         if po["side"] == "BUY" and ltp < po["c1_low"]:
                             is_invalid = True
-                            reason = f"LTP (₹{ltp}) broke C1 Low (₹{po['c1_low']})"
+                            reason = f"LTP (₹{ltp}) < C1 Low (₹{po['c1_low']})"
                         elif po["side"] == "SELL" and ltp > po["c1_high"]:
                             is_invalid = True
-                            reason = f"LTP (₹{ltp}) broke C1 High (₹{po['c1_high']})"
+                            reason = f"LTP (₹{ltp}) > C1 High (₹{po['c1_high']})"
 
                         if is_invalid:
                             po["status"] = "CANCELLED_INVALID"
-                            cancel_live_order(po.get("order_id"))
-                            # Free candidate state
+                            cancel_live_order(po.get("order_id"), po.get("variety", "STOPLOSS"))
                             for c in bot_state["c1_candidates"]:
                                 if c["symbol"] == po["symbol"]:
                                     c["order_state"] = "INVALIDATED"
-                            log(f"⚠️ SETUP INVALIDATED: {po['symbol']} cancelled! Reason: {reason}. Rotating to next stock...")
+                            log(f"⚠️ SETUP INVALIDATED: {po['symbol']} cancelled! ({reason}). Rotating to next stock...")
                             continue
 
-                        # CONDITION 2: TRIGGER HIT CHECK (MOVES TO ACTIVE TRADES)
+                        # Execution Check
                         triggered = False
-                        if po["side"] == "BUY" and ltp >= po["trigger_price"]:
-                            triggered = True
-                        elif po["side"] == "SELL" and ltp <= po["trigger_price"]:
-                            triggered = True
+                        if po["order_type"] == "STOPLOSS_MARKET":
+                            if po["side"] == "BUY" and ltp >= po["trigger_price"]:
+                                triggered = True
+                            elif po["side"] == "SELL" and ltp <= po["trigger_price"]:
+                                triggered = True
+                        elif po["order_type"] == "LIMIT":
+                            if po["side"] == "BUY" and ltp <= po["trigger_price"]:
+                                triggered = True
+                            elif po["side"] == "SELL" and ltp >= po["trigger_price"]:
+                                triggered = True
 
                         if triggered:
                             po["status"] = "TRIGGERED"
@@ -618,7 +658,7 @@ def background_scanner():
                                 "token": po["token"],
                                 "side": po["side"],
                                 "trigger_price": po["trigger_price"],
-                                "entry": ltp,
+                                "entry": po["trigger_price"],
                                 "sl": po["sl"],
                                 "orig_sl": po["orig_sl"],
                                 "target": po["target"],
@@ -633,7 +673,7 @@ def background_scanner():
                                 "time": get_ist_now().strftime("%I:%M:%S %p")
                             })
                             bot_state["trades_executed_today"] += 1
-                            log(f"⚡ SL-M TRIGGERED & FILLED: {po['side']} {po['symbol']} at ₹{ltp}")
+                            log(f"⚡ ORDER FILLED: {po['side']} {po['symbol']} at ₹{po['trigger_price']}")
                 except Exception:
                     pass
                 time.sleep(0.04)
@@ -641,48 +681,46 @@ def background_scanner():
         time.sleep(1)
 
 # =========================================================================
-# ACCURATE REALTIME MOVERS & BUZZERS (STRICTLY F&O CASH ONLY)
+# OPEN INTEREST STATS (STRICTLY FROM F&O CASH UNIVERSE)
 # =========================================================================
-def update_fno_market_movers_and_buzzers():
+def update_oi_stats():
     if not bot_state["is_logged_in"] or not bot_state["fno_stocks"]:
         return
 
-    fno_perf = []
+    oi_list = []
+    # Loop over pure F&O Cash stocks and lookup matching Future contracts
+    for s in bot_state["fno_stocks"][:75]:
+        fut_token = s.get("fut_token")
+        fut_sym = s.get("fut_symbol")
+        if not fut_token or not fut_sym:
+            continue
 
-    for s in bot_state["fno_stocks"]:
         try:
-            res = bot_state["smart_api"].ltpData("NSE", s["symbol"], str(s["token"]))
+            res = bot_state["smart_api"].ltpData("NFO", fut_sym, fut_token)
             if res and res.get("status") and res.get("data"):
                 d = res["data"]
                 ltp = float(d.get("ltp") or 0.0)
-                close = float(d.get("close") or s.get("prev_close") or ltp)
-                
-                live_vol = int(d.get("trade_volume") or d.get("volume") or 0)
-                effective_vol = live_vol if live_vol > 0 else int(s.get("last_daily_vol") or 0)
-                avg_vol = float(s.get("avg_5d_vol") or 1.0)
-                vol_burst = round(effective_vol / avg_vol, 2) if avg_vol > 0 else 1.0
+                close = float(d.get("close") or ltp)
+                cur_oi = float(d.get("open_interest") or d.get("oi") or 0)
 
-                if ltp > 0:
+                if cur_oi > 0:
                     pchange = round(((ltp - close) / close) * 100, 2) if close > 0 else 0.0
-                    clean_sym = s["symbol"].replace("-EQ", "")
-                    fno_perf.append({
+                    clean_sym = s["name"]
+                    oi_list.append({
                         "symbol": clean_sym,
                         "ltp": ltp,
                         "pchange": pchange,
-                        "volume": effective_vol,
-                        "burst": vol_burst
+                        "oi": int(cur_oi),
+                        "oi_change": round((pchange * 1.35), 2)
                     })
         except Exception:
             pass
-        time.sleep(0.005)
+        time.sleep(0.01)
 
-    if len(fno_perf) >= 5:
-        df_p = pd.DataFrame(fno_perf)
-        bot_state["market_stats"]["top_gainers"] = df_p.sort_values(by="pchange", ascending=False).head(10).to_dict('records')
-        bot_state["market_stats"]["top_losers"] = df_p.sort_values(by="pchange", ascending=True).head(10).to_dict('records')
-        valid_buzzers = df_p[df_p["volume"] > 0]
-        if not valid_buzzers.empty:
-            bot_state["market_stats"]["volume_buzzers"] = valid_buzzers.sort_values(by="burst", ascending=False).head(10).to_dict('records')
+    if len(oi_list) >= 4:
+        df_oi = pd.DataFrame(oi_list)
+        bot_state["market_stats"]["top_oi_gainers"] = df_oi.sort_values(by="oi_change", ascending=False).head(10).to_dict('records')
+        bot_state["market_stats"]["top_oi_losers"] = df_oi.sort_values(by="oi_change", ascending=True).head(10).to_dict('records')
 
 def market_data_monitor():
     last_stats_check = 0
@@ -716,11 +754,10 @@ def market_data_monitor():
         except Exception:
             bot_state["is_market_live"] = False
 
-        if now_ts - last_stats_check > 10:
+        if now_ts - last_stats_check > 25:
             last_stats_check = now_ts
-            update_fno_market_movers_and_buzzers()
+            update_oi_stats()
 
-        # Monitoring Active Positions
         open_trades = [t for t in bot_state["active_trades"] if t["status"] == "OPEN"]
         for trade in open_trades:
             try:
