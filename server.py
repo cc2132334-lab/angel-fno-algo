@@ -1,31 +1,67 @@
 import os
 import time
 import json
+import pyotp
 import requests
 import datetime
 import threading
 import pandas as pd
 from dateutil import tz
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for
-from user_manager import (
-    authenticate_and_create_session,
-    get_user,
-    save_user_settings,
-    active_user_sessions
-)
+from flask import Flask, render_template, request, jsonify, session
+from SmartApi import SmartConnect
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "terminal_session_key_2026")
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "algo_multi_user_key_2026")
 
 IST = tz.gettz('Asia/Kolkata')
+CONFIG_DIR = "user_configs"
+if not os.path.exists(CONFIG_DIR):
+    os.makedirs(CONFIG_DIR)
 
 def get_ist_now():
     return datetime.datetime.now(IST)
 
+def load_user_config(client_code):
+    default_config = {
+        "engine_running": True,
+        "max_trades": 3,
+        "rr_ratio": 3,
+        "cutoff_time": "15:00",
+        "risk_amount": 500,
+        "trading_mode": "PAPER"
+    }
+    filename = os.path.join(CONFIG_DIR, f"config_{client_code}.json")
+    if os.path.exists(filename):
+        try:
+            with open(filename, "r") as f:
+                return {**default_config, **json.load(f)}
+        except Exception:
+            pass
+    return default_config
+
+def save_user_config(client_code):
+    if client_code not in user_sessions:
+        return
+    u = user_sessions[client_code]
+    data = {
+        "engine_running": u["engine_running"],
+        "max_trades": u["max_trades"],
+        "rr_ratio": u["rr_ratio"],
+        "cutoff_time": u["cutoff_time"],
+        "risk_amount": u["risk_amount"],
+        "trading_mode": u["trading_mode"]
+    }
+    try:
+        with open(os.path.join(CONFIG_DIR, f"config_{client_code}.json"), "w") as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        print(f"Config save error: {e}")
+
+# SHARED MARKET DATA POOL
 shared_market = {
     "fno_stocks": [],
     "fno_fut_map": {},
-    "is_market_live": False,
+    "is_market_live": True,
     "market_indices": {
         "NIFTY": {"ltp": 0.0, "change": 0.0, "pchange": 0.0},
         "SENSEX": {"ltp": 0.0, "change": 0.0, "pchange": 0.0}
@@ -36,14 +72,24 @@ shared_market = {
     },
     "c1_candidates": [],
     "universe_loaded": False,
-    "primary_api": None
+    "primary_api": None,
+    "daemons_started": False
 }
+
+# ISOLATED MULTI-USER STORAGE
+user_sessions = {}
+
+def get_current_user():
+    client_code = session.get("client_code")
+    if client_code and client_code in user_sessions:
+        return user_sessions[client_code]
+    return None
 
 def user_log(client_code, msg):
     timestamp = get_ist_now().strftime("%I:%M:%S %p")
     entry = f"[{timestamp} IST] {msg}"
-    u = get_user(client_code)
-    if u:
+    if client_code in user_sessions:
+        u = user_sessions[client_code]
         u["status_log"] = entry
         u["system_logs"].append(entry)
         if len(u["system_logs"]) > 200:
@@ -109,7 +155,7 @@ def load_fno_universe(api_instance):
     if shared_market["universe_loaded"]:
         return
     try:
-        print("Downloading Angel One Master & strictly filtering F&O universe...")
+        print("Downloading Angel One Master & extracting F&O universe...")
         url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
         res = requests.get(url, timeout=25)
         master = res.json()
@@ -173,47 +219,78 @@ def load_fno_universe(api_instance):
 
 @app.route('/')
 def index():
-    client_code = session.get("client_code")
-    if not client_code or not get_user(client_code):
-        return redirect(url_for('login_page'))
     return render_template('index.html')
-
-@app.route('/login')
-def login_page():
-    return render_template('login.html')
-
-@app.route('/logout')
-def logout():
-    session.pop("client_code", None)
-    return redirect(url_for('login_page'))
 
 @app.route('/api/login', methods=['POST'])
 def api_login():
     data = request.json or {}
-    success, client_code, message = authenticate_and_create_session(
-        data.get("api_key"),
-        data.get("client_code"),
-        data.get("pin"),
-        data.get("totp_secret")
-    )
-    if success:
-        session["client_code"] = client_code
-        u = get_user(client_code)
-        if not shared_market["primary_api"]:
-            shared_market["primary_api"] = u["smart_api"]
-        if not shared_market["universe_loaded"]:
-            threading.Thread(target=load_fno_universe, args=(u["smart_api"],), daemon=True).start()
-        return jsonify({"status": "success", "message": "Login Successful!"})
-    return jsonify({"status": "error", "message": message})
+    client_code = str(data.get("client_code", "")).strip().upper()
+    api_key = str(data.get("api_key", "")).strip()
+    pin = str(data.get("pin", "")).strip()
+    totp_secret = str(data.get("totp_secret", "")).strip()
+
+    if not client_code or not api_key:
+        return jsonify({"status": "error", "message": "Client Code and API Key required"})
+
+    try:
+        smart_api = SmartConnect(api_key=api_key)
+        totp = pyotp.TOTP(totp_secret).now()
+        login_res = smart_api.generateSession(client_code, pin, totp)
+
+        if login_res.get('status'):
+            feed_token = smart_api.getfeedToken()
+            saved_conf = load_user_config(client_code)
+
+            user_sessions[client_code] = {
+                "client_code": client_code,
+                "api_key": api_key,
+                "smart_api": smart_api,
+                "feed_token": feed_token,
+                "is_logged_in": True,
+                "engine_running": saved_conf["engine_running"],
+                "risk_amount": int(saved_conf["risk_amount"]),
+                "trading_mode": saved_conf["trading_mode"],
+                "max_trades": int(saved_conf["max_trades"]),
+                "rr_ratio": int(saved_conf["rr_ratio"]),
+                "cutoff_time": str(saved_conf["cutoff_time"]),
+                "trades_executed_today": 0,
+                "total_pnl": 0.0,
+                "pending_orders": [],
+                "active_trades": [],
+                "trade_history": [],
+                "system_logs": ["Session established successfully."],
+                "status_log": "Broker Connected. Strategy Active."
+            }
+
+            session["client_code"] = client_code
+
+            # Start background market stream immediately
+            if not shared_market["primary_api"]:
+                shared_market["primary_api"] = smart_api
+
+            if not shared_market["universe_loaded"]:
+                threading.Thread(target=load_fno_universe, args=(smart_api,), daemon=True).start()
+
+            if not shared_market["daemons_started"]:
+                shared_market["daemons_started"] = True
+                threading.Thread(target=background_scanner, daemon=True).start()
+                threading.Thread(target=market_data_monitor, daemon=True).start()
+
+            user_log(client_code, f"Connected successfully as {client_code}. Market feed armed.")
+            return jsonify({"status": "success", "message": "Login Successful!"})
+        else:
+            return jsonify({"status": "error", "message": login_res.get("message", "Login failed")})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
 
 @app.route('/api/update-settings', methods=['POST'])
 def update_settings():
-    client_code = session.get("client_code")
-    u = get_user(client_code)
+    u = get_current_user()
     if not u:
-        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+        return jsonify({"status": "error", "message": "Not logged in"}), 401
 
     data = request.json or {}
+    client_code = u["client_code"]
     if "max_trades" in data:
         u["max_trades"] = int(data["max_trades"])
     if "rr_ratio" in data:
@@ -223,67 +300,41 @@ def update_settings():
     if "risk_amount" in data:
         u["risk_amount"] = int(data["risk_amount"])
 
-    save_user_settings(client_code, {
-        "engine_running": u["engine_running"],
-        "max_trades": u["max_trades"],
-        "rr_ratio": u["rr_ratio"],
-        "cutoff_time": u["cutoff_time"],
-        "risk_amount": u["risk_amount"],
-        "trading_mode": u["trading_mode"]
-    })
+    save_user_config(client_code)
     user_log(client_code, "Settings updated.")
     return jsonify({"status": "success"})
 
 @app.route('/api/toggle-engine', methods=['POST'])
 def toggle_engine():
-    client_code = session.get("client_code")
-    u = get_user(client_code)
+    u = get_current_user()
     if not u:
         return jsonify({"status": "error"}), 401
-
     data = request.json or {}
     u["engine_running"] = data.get("running", True)
-    save_user_settings(client_code, {
-        "engine_running": u["engine_running"],
-        "max_trades": u["max_trades"],
-        "rr_ratio": u["rr_ratio"],
-        "cutoff_time": u["cutoff_time"],
-        "risk_amount": u["risk_amount"],
-        "trading_mode": u["trading_mode"]
-    })
+    save_user_config(u["client_code"])
     status_str = "RUNNING" if u["engine_running"] else "STOPPED"
-    user_log(client_code, f"Engine status: {status_str}")
+    user_log(u["client_code"], f"Engine status: {status_str}")
     return jsonify({"status": "success", "engine_running": u["engine_running"]})
 
 @app.route('/api/set-mode', methods=['POST'])
 def set_mode():
-    client_code = session.get("client_code")
-    u = get_user(client_code)
+    u = get_current_user()
     if not u:
         return jsonify({"status": "error"}), 401
-
     data = request.json or {}
     mode = data.get("mode", "PAPER").upper()
     if mode in ["PAPER", "LIVE"]:
         u["trading_mode"] = mode
-        save_user_settings(client_code, {
-            "engine_running": u["engine_running"],
-            "max_trades": u["max_trades"],
-            "rr_ratio": u["rr_ratio"],
-            "cutoff_time": u["cutoff_time"],
-            "risk_amount": u["risk_amount"],
-            "trading_mode": u["trading_mode"]
-        })
-        user_log(client_code, f"Mode switched to: {mode}")
+        save_user_config(u["client_code"])
+        user_log(u["client_code"], f"Mode switched to: {mode}")
         return jsonify({"status": "success", "mode": mode})
     return jsonify({"status": "error"})
 
 @app.route('/api/manual-5x-scan', methods=['POST'])
 def manual_5x_scan():
-    client_code = session.get("client_code")
-    u = get_user(client_code)
+    u = get_current_user()
     if not u:
-        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+        return jsonify({"status": "error", "message": "Please connect broker first"}), 401
 
     data = request.get_json(force=True) or {}
     selected_date = data.get("date")
@@ -306,7 +357,7 @@ def manual_5x_scan():
     filtered_results = []
     for item in stocks_to_scan:
         if u.get("scan_cancelled"):
-            user_log(client_code, "Manual Scan stopped by user.")
+            user_log(u["client_code"], "Manual Scan stopped by user.")
             break
 
         time.sleep(0.04)
@@ -354,21 +405,29 @@ def manual_5x_scan():
 
 @app.route('/api/stop-manual-scan', methods=['POST'])
 def stop_manual_scan():
-    client_code = session.get("client_code")
-    u = get_user(client_code)
+    u = get_current_user()
     if u:
         u["scan_cancelled"] = True
     return jsonify({"status": "success", "message": "Scan stopped."})
 
 @app.route('/api/state', methods=['GET'])
 def get_state():
-    client_code = session.get("client_code")
-    u = get_user(client_code)
+    u = get_current_user()
     if not u:
-        return jsonify({"logged_in": False})
+        return jsonify({
+            "logged_in": False,
+            "is_logged_in": False,
+            "broker_connected": False,
+            "is_market_live": shared_market["is_market_live"],
+            "angel_status": "WAITING LOGIN",
+            "market_indices": shared_market["market_indices"],
+            "market_stats": shared_market["market_stats"]
+        })
 
     return jsonify({
         "logged_in": True,
+        "is_logged_in": True,
+        "broker_connected": True,
         "client_code": u["client_code"],
         "is_market_live": shared_market["is_market_live"],
         "angel_status": "CONNECTED",
@@ -423,6 +482,9 @@ def cancel_live_order(api, order_id, variety="STOPLOSS"):
     except Exception:
         return False
 
+# =========================================================================
+# STRATEGY SCANNER & MULTI-USER DISPATCH
+# =========================================================================
 def background_scanner():
     c1_scanned = False
 
@@ -481,7 +543,7 @@ def background_scanner():
             c1_scanned = True
 
         if c1_scanned and now_time >= datetime.time(9, 25, 2):
-            for client_code, u in list(active_user_sessions.items()):
+            for client_code, u in list(user_sessions.items()):
                 if not u["is_logged_in"] or not u["engine_running"]:
                     continue
 
@@ -672,6 +734,9 @@ def background_scanner():
 
         time.sleep(1)
 
+# =========================================================================
+# REALTIME NIFTY, SENSEX & OI MONITOR
+# =========================================================================
 def update_oi_stats():
     api = shared_market["primary_api"]
     if not api or not shared_market["fno_stocks"]:
@@ -725,6 +790,7 @@ def market_data_monitor():
 
         is_weekday = (now_ist.weekday() < 5)
         is_time_window = (datetime.time(9, 15) <= now_ist.time() <= datetime.time(15, 30))
+        shared_market["is_market_live"] = (is_weekday and is_time_window)
 
         try:
             n_res = api.ltpData("NSE", "NIFTY", "99926000")
@@ -734,9 +800,6 @@ def market_data_monitor():
                 change = round(ltp - close, 2)
                 pchange = round((change / close) * 100, 2) if close > 0 else 0.0
                 shared_market["market_indices"]["NIFTY"] = {"ltp": ltp, "change": change, "pchange": pchange}
-                shared_market["is_market_live"] = (is_weekday and is_time_window)
-            else:
-                shared_market["is_market_live"] = False
 
             s_res = api.ltpData("BSE", "SENSEX", "99919000")
             if s_res and s_res.get("data"):
@@ -746,13 +809,13 @@ def market_data_monitor():
                 pchange = round((change / close) * 100, 2) if close > 0 else 0.0
                 shared_market["market_indices"]["SENSEX"] = {"ltp": ltp, "change": change, "pchange": pchange}
         except Exception:
-            shared_market["is_market_live"] = False
+            pass
 
         if now_ts - last_stats_check > 25:
             last_stats_check = now_ts
             update_oi_stats()
 
-        for client_code, u in list(active_user_sessions.items()):
+        for client_code, u in list(user_sessions.items()):
             if not u["is_logged_in"]:
                 continue
 
@@ -822,9 +885,6 @@ def record_user_trade_history(user_obj, trade, exit_price):
         "pnl": trade["pnl"],
         "status": trade["status"]
     })
-
-threading.Thread(target=background_scanner, daemon=True).start()
-threading.Thread(target=market_data_monitor, daemon=True).start()
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
