@@ -268,7 +268,7 @@ def set_mode():
     return jsonify({"status": "error"})
 
 # =========================================================================
-# MODIFIED MANUAL 5X VOLUME SCANNER ENGINE
+# MANUAL SCANNER: FIRST 5 MINUTES (09:15-09:20 AM C1) ONLY
 # =========================================================================
 @app.route('/api/manual-5x-scan', methods=['POST'])
 def manual_5x_scan():
@@ -294,7 +294,7 @@ def manual_5x_scan():
         return jsonify({"status": "error", "message": "F&O universe loading... please wait 10 seconds"})
 
     filtered_results = []
-    log(f"Manual 5x scan started for date: {selected_date}...")
+    log(f"Manual 5x scan strictly checking First 5-Min (09:15 AM) candle for {selected_date}...")
 
     for item in stocks_to_scan:
         if bot_state["scan_cancelled"]:
@@ -314,11 +314,16 @@ def manual_5x_scan():
             if res and res.get("status") and res.get("data"):
                 df = pd.DataFrame(res["data"], columns=["time", "open", "high", "low", "close", "volume"])
                 df['time_str'] = df['time'].astype(str)
-                df['date_part'] = df['time_str'].apply(lambda x: x[:10])
 
-                day_indices = df.index[df['date_part'] == selected_date].tolist()
-                if day_indices:
-                    c1_idx = day_indices[0]
+                # Exactly match the first 5 minutes candle (09:15:00) of the selected date
+                c1_matches = df.index[
+                    (df['time_str'].str.startswith(selected_date)) & 
+                    (df['time_str'].str.contains("09:15"))
+                ].tolist()
+
+                if c1_matches:
+                    c1_idx = c1_matches[0]
+                    # Get the preceding 20 candles prior to 09:15 of the target day
                     start_idx = max(0, c1_idx - 20)
                     prev_candles = df.iloc[start_idx:c1_idx]
                     
@@ -327,6 +332,7 @@ def manual_5x_scan():
                         c1_candle = df.iloc[c1_idx]
                         c1_vol = float(c1_candle["volume"])
 
+                        # Strict 5x Volume on FIRST 5-minute candle
                         if avg_vol > 0 and (c1_vol >= 5 * avg_vol):
                             filtered_results.append({
                                 "symbol": item["symbol"].replace("-EQ", ""),
@@ -339,7 +345,7 @@ def manual_5x_scan():
         except Exception:
             continue
 
-    log(f"Manual scan complete. Found {len(filtered_results)} stock(s).")
+    log(f"First 5-Min 5x Scan Finished: Found {len(filtered_results)} stock(s) for {selected_date}.")
 
     return jsonify({
         "status": "success",
