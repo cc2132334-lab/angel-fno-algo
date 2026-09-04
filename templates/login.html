@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>🔐 Angel One Algo Login</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background: #f8fafc; color: #0f172a; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 16px; }
+        .login-card { background: #ffffff; border: 2px solid #0284c7; border-radius: 12px; padding: 24px; width: 100%; max-width: 420px; box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+        h1 { font-size: 1.25rem; font-weight: 800; color: #0284c7; text-align: center; margin-bottom: 6px; }
+        p { font-size: 0.8rem; color: #64748b; text-align: center; margin-bottom: 20px; }
+        label { font-size: 0.75rem; font-weight: 600; color: #64748b; margin-top: 10px; display: block; }
+        input { width: 100%; padding: 11px; border-radius: 8px; border: 1px solid #e2e8f0; margin-top: 4px; font-size: 0.9rem; }
+        input:focus { border-color: #0284c7; outline: none; }
+        button { width: 100%; padding: 12px; border-radius: 8px; border: none; background: #0284c7; color: white; font-weight: bold; font-size: 0.95rem; margin-top: 18px; cursor: pointer; }
+        button:disabled { opacity: 0.6; cursor: not-allowed; }
+        .error-msg { color: #dc2626; font-size: 0.8rem; font-weight: 600; text-align: center; margin-top: 10px; display: none; }
+    </style>
+</head>
+<body>
+
+    <div class="login-card">
+        <h1>⚡ ALGO TERMINAL PRO</h1>
+        <p>Login with your Angel One SmartAPI credentials</p>
+
+        <label>SmartAPI Key</label>
+        <input type="text" id="api_key" placeholder="Enter API Key" required>
+
+        <label>Client Code / ID</label>
+        <input type="text" id="client_code" placeholder="e.g. AB1234" required>
+
+        <label>4-Digit MPIN</label>
+        <input type="password" id="pin" placeholder="Enter MPIN" required>
+
+        <label>TOTP Secret Key</label>
+        <input type="password" id="totp_secret" placeholder="Enter TOTP Secret" required>
+
+        <button id="login-btn" onclick="submitLogin()">Connect Broker & Launch Terminal</button>
+        <div class="error-msg" id="err-box"></div>
+    </div>
+
+    <script>
+        async function submitLogin() {
+            const btn = document.getElementById('login-btn');
+            const errBox = document.getElementById('err-box');
+            errBox.style.display = 'none';
+
+            const payload = {
+                api_key: document.getElementById('api_key').value.trim(),
+                client_code: document.getElementById('client_code').value.trim(),
+                pin: document.getElementById('pin').value.trim(),
+                totp_secret: document.getElementById('totp_secret').value.trim()
+            };
+
+            if (!payload.api_key || !payload.client_code || !payload.pin || !payload.totp_secret) {
+                errBox.innerText = "Please fill all credentials.";
+                errBox.style.display = 'block';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerText = "Verifying with Angel One...";
+
+            try {
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    window.location.href = '/';
+                } else {
+                    errBox.innerText = data.message || "Login failed.";
+                    errBox.style.display = 'block';
+                    btn.disabled = false;
+                    btn.innerText = "Connect Broker & Launch Terminal";
+                }
+            } catch (err) {
+                errBox.innerText = "Network Error. Please retry.";
+                errBox.style.display = 'block';
+                btn.disabled = false;
+                btn.innerText = "Connect Broker & Launch Terminal";
+            }
+        }
+    </script>
+</body>
+</html>
