@@ -100,7 +100,6 @@
         <div class="clock-time" id="live-clock">--:--:-- --</div>
     </div>
 
-    <!-- 1. LOGIN CARD -->
     <div class="card" id="login-card" style="border: 2px solid var(--accent); padding: 18px;">
         <h2 style="font-size: 1.05rem; margin-bottom: 8px; text-align: center;">🔐 Connect Angel One Broker</h2>
         <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px; text-align: center;">Terminal access karne ke liye broker connect karein.</p>
@@ -111,7 +110,6 @@
         <button id="login-btn" style="background: var(--accent); color: white; margin-top: 12px; padding: 11px;" onclick="login()">Connect Broker & Unlock Terminal</button>
     </div>
 
-    <!-- 2. MAIN TERMINAL -->
     <div id="main-terminal" style="display: none;">
         
         <div class="ticker-bar">
@@ -129,7 +127,6 @@
 
         <div class="status-box" id="system-status">Connecting...</div>
 
-        <!-- Engine Control & Net P&L -->
         <div class="card" style="border-left: 4px solid #f59e0b;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                 <div>
@@ -145,7 +142,6 @@
             <button id="btn-engine" onclick="toggleEngine()" style="background: #16a34a; color: white;">🟢 ENGINE RUNNING (Click to Pause)</button>
         </div>
 
-        <!-- BOT CONTROLS -->
         <div class="card">
             <h2>⚙️ Bot Configuration & Limits</h2>
             
@@ -193,7 +189,7 @@
             </div>
         </div>
 
-        <!-- MANUAL SCANNER -->
+        <!-- RE-CALIBRATED MANUAL 5X SCANNER -->
         <div class="card">
             <h2>🔍 Manual 5x Volume Scanner (F&O Cash Only)</h2>
             <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 8px;">Date select karke 9:15-9:20 AM C1 candle ka 5x Volume breakout scan karein.</p>
@@ -229,7 +225,6 @@
             </div>
         </div>
 
-        <!-- TOP OI STATS (WATCH ONLY) -->
         <div class="card">
             <h2>📈 Top Open Interest Movers (Watch Only)</h2>
             <div class="tabs" id="oi-tabs">
@@ -238,11 +233,10 @@
             </div>
             <table>
                 <thead><tr><th>Symbol</th><th>LTP</th><th>OI Chg %</th><th>Open Interest</th></tr></thead>
-                <tbody id="oi-body"><tr><td colspan="4" style="text-align:center; color: var(--text-muted);">Loading Open Interest data...</td></tr></tbody>
+                <tbody id="oi-body"><tr><td colspan="4" style="text-align:center; color: var(--text-muted);">Loading live Open Interest data...</td></tr></tbody>
             </table>
         </div>
 
-        <!-- ACTIVE POSITIONS, PENDING ORDERS, TRADE HISTORY & SYSTEM LOGS -->
         <div class="card">
             <div class="tabs" id="execution-tabs">
                 <button class="tab-btn active" onclick="switchTradesTab('active', this)">⚡ Active Positions</button>
@@ -351,45 +345,59 @@
 
             const scanBtn = document.getElementById('btn-scan');
             const stopBtn = document.getElementById('btn-stop-scan');
-            scanBtn.innerText = "Scanning...";
+            const resultBox = document.getElementById('manual-scan-results');
+            const summaryElem = document.getElementById('scan-summary');
+            const tableBody = document.getElementById('manual-scan-body');
+
+            scanBtn.innerText = "Scanning 200+ stocks...";
             scanBtn.disabled = true;
-            stopBtn.style.display = 'block';
+            stopBtn.style.display = 'inline-block';
+            resultBox.style.display = 'block';
+            summaryElem.innerText = `Scanning F&O universe for ${dateVal}... please wait`;
+            tableBody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">Fetching 5-minute candles from broker...</td></tr>`;
 
-            const res = await fetch('/api/manual-5x-scan', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({date: dateVal})
-            });
-            const data = await res.json();
-            scanBtn.innerText = "🚀 Scan 5x Volume";
-            scanBtn.disabled = false;
-            stopBtn.style.display = 'none';
-
-            if(data.status === 'success') {
-                const container = document.getElementById('manual-scan-results');
-                container.style.display = 'block';
-                const statusTxt = data.cancelled ? " (Stopped Early)" : "";
-                document.getElementById('scan-summary').innerText = `Date: ${data.date} | Found: ${data.count} stocks${statusTxt}`;
-
-                if(data.results.length === 0) {
-                    document.getElementById('manual-scan-body').innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No stock met >= 5x C1 volume criteria</td></tr>`;
-                    return;
-                }
-
-                let html = '';
-                data.results.forEach(r => {
-                    html += `<tr>
-                        <td><b>${r.symbol}</b></td>
-                        <td>₹${r.c1_high}</td>
-                        <td>₹${r.c1_low}</td>
-                        <td>${r.c1_volume.toLocaleString()}</td>
-                        <td>${r.avg_volume.toLocaleString()}</td>
-                        <td><span class="highlight-oi">${r.multiplier}x</span></td>
-                    </tr>`;
+            try {
+                const res = await fetch('/api/manual-5x-scan', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({date: dateVal})
                 });
-                document.getElementById('manual-scan-body').innerHTML = html;
-            } else {
-                alert(data.message);
+                const data = await res.json();
+                
+                scanBtn.innerText = "🚀 Scan 5x Volume";
+                scanBtn.disabled = false;
+                stopBtn.style.display = 'none';
+
+                if(data.status === 'success') {
+                    const statusTxt = data.cancelled ? " (Stopped Early)" : "";
+                    summaryElem.innerText = `Date: ${data.date} | Found: ${data.count} stocks${statusTxt}`;
+
+                    if(!data.results || data.results.length === 0) {
+                        tableBody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No stock met >= 5x C1 volume criteria on this date</td></tr>`;
+                        return;
+                    }
+
+                    let html = '';
+                    data.results.forEach(r => {
+                        html += `<tr>
+                            <td><b>${r.symbol}</b></td>
+                            <td>₹${r.c1_high}</td>
+                            <td>₹${r.c1_low}</td>
+                            <td>${r.c1_volume.toLocaleString()}</td>
+                            <td>${r.avg_volume.toLocaleString()}</td>
+                            <td><span class="highlight-oi">${r.multiplier}x</span></td>
+                        </tr>`;
+                    });
+                    tableBody.innerHTML = html;
+                } else {
+                    summaryElem.innerText = "";
+                    tableBody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:red;">${data.message || 'Scan error'}</td></tr>`;
+                }
+            } catch(err) {
+                scanBtn.innerText = "🚀 Scan 5x Volume";
+                scanBtn.disabled = false;
+                stopBtn.style.display = 'none';
+                tableBody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:red;">Network or Server Timeout. Retry.</td></tr>`;
             }
         }
 
