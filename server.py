@@ -151,7 +151,6 @@ def load_fno_universe():
         res = requests.get(url, timeout=25)
         master = res.json()
 
-        # Map current near-month Future contracts
         fno_futures = {}
         for s in master:
             if s.get('exch_seg') == 'NFO' and s.get('instrumenttype') == 'FUTSTK':
@@ -268,6 +267,9 @@ def set_mode():
         return jsonify({"status": "success", "mode": mode})
     return jsonify({"status": "error"})
 
+# =========================================================================
+# MODIFIED MANUAL 5X VOLUME SCANNER ENGINE
+# =========================================================================
 @app.route('/api/manual-5x-scan', methods=['POST'])
 def manual_5x_scan():
     if not bot_state.get("smart_api"):
@@ -282,22 +284,24 @@ def manual_5x_scan():
 
     try:
         target_dt = datetime.datetime.strptime(selected_date, "%Y-%m-%d")
-        from_dt = (target_dt - datetime.timedelta(days=7)).strftime("%Y-%m-%d 09:15")
-        to_dt = target_dt.strftime("%Y-%m-%d 15:30")
+        from_dt = (target_dt - datetime.timedelta(days=10)).strftime("%Y-%m-%d 09:15")
+        to_dt = (target_dt + datetime.timedelta(days=1)).strftime("%Y-%m-%d 15:30")
     except Exception:
         return jsonify({"status": "error", "message": "Invalid date format"})
 
     stocks_to_scan = bot_state["fno_stocks"]
     if not stocks_to_scan:
-        return jsonify({"status": "error", "message": "F&O universe loading..."})
+        return jsonify({"status": "error", "message": "F&O universe loading... please wait 10 seconds"})
 
     filtered_results = []
+    log(f"Manual 5x scan started for date: {selected_date}...")
+
     for item in stocks_to_scan:
         if bot_state["scan_cancelled"]:
             log("Manual Scan stopped by user.")
             break
 
-        time.sleep(0.04)
+        time.sleep(0.035)
         params = {
             "exchange": "NSE",
             "symboltoken": str(item["token"]),
@@ -309,14 +313,17 @@ def manual_5x_scan():
             res = bot_state["smart_api"].getCandleData(params)
             if res and res.get("status") and res.get("data"):
                 df = pd.DataFrame(res["data"], columns=["time", "open", "high", "low", "close", "volume"])
-                df['date_str'] = df['time'].apply(lambda x: str(x).split('T')[0] if 'T' in str(x) else str(x).split(' ')[0])
-                
-                day_df = df[df['date_str'] == selected_date]
-                if not day_df.empty and len(day_df) >= 1:
-                    c1_idx = day_df.index[0]
-                    if c1_idx >= 20:
-                        prev_20 = df.iloc[c1_idx-20:c1_idx]
-                        avg_vol = prev_20["volume"].mean()
+                df['time_str'] = df['time'].astype(str)
+                df['date_part'] = df['time_str'].apply(lambda x: x[:10])
+
+                day_indices = df.index[df['date_part'] == selected_date].tolist()
+                if day_indices:
+                    c1_idx = day_indices[0]
+                    start_idx = max(0, c1_idx - 20)
+                    prev_candles = df.iloc[start_idx:c1_idx]
+                    
+                    if len(prev_candles) >= 5:
+                        avg_vol = float(prev_candles["volume"].mean())
                         c1_candle = df.iloc[c1_idx]
                         c1_vol = float(c1_candle["volume"])
 
@@ -331,6 +338,8 @@ def manual_5x_scan():
                             })
         except Exception:
             continue
+
+    log(f"Manual scan complete. Found {len(filtered_results)} stock(s).")
 
     return jsonify({
         "status": "success",
@@ -425,9 +434,6 @@ def place_live_exit_order(symbol, token, side, qty):
         log(f"LIVE EXIT ERROR: {e}")
         return None
 
-# =========================================================================
-# ORIGINAL STRATEGY ENGINE: 5X VOLUME + PDH/PDL BREAKOUT
-# =========================================================================
 def background_scanner():
     c1_scanned = False
 
@@ -456,7 +462,6 @@ def background_scanner():
             time.sleep(5)
             continue
 
-        # 09:20 AM - C1 Filter Phase
         if not c1_scanned and now_time >= datetime.time(9, 20, 2):
             log(f"09:20 AM: Scanning all {len(bot_state['fno_stocks'])} F&O stocks for 5x Volume + PDH/PDL Breakout...")
             candidates = []
@@ -501,7 +506,6 @@ def background_scanner():
             log(f"C1 Scan Complete: {len(candidates)} candidate(s) ready for continuous SL-M engine.")
             c1_scanned = True
 
-        # 09:25 AM to Cutoff Time: Continuous SL-M Placement & Invalidation Check
         if c1_scanned and now_time >= datetime.time(9, 25, 2):
             active_open_count = len([t for t in bot_state["active_trades"] if t["status"] == "OPEN"])
             pending_count = len([p for p in bot_state["pending_orders"] if p["status"] == "PENDING"])
@@ -581,7 +585,6 @@ def background_scanner():
                             pending_count += 1
                             log(f"SL-M Order Armed [{mode}]: {side} {cand['symbol']} Trigger@{slm_trigger}")
 
-            # Pending Order Validation (Breach check & Execution check)
             for po in bot_state["pending_orders"]:
                 if po["status"] != "PENDING":
                     continue
@@ -591,7 +594,6 @@ def background_scanner():
                     if res and res.get("status") and res.get("data"):
                         ltp = float(res["data"]["ltp"])
 
-                        # Setup Invalidation: Breach of C1 Low for BUY / C1 High for SELL
                         is_invalid = False
                         if po["side"] == "BUY" and ltp < po["c1_low"]:
                             is_invalid = True
@@ -609,7 +611,6 @@ def background_scanner():
                             log(f"⚠️ SETUP INVALIDATED: {po['symbol']} cancelled! ({reason}). Rotating to next stock...")
                             continue
 
-                        # Trigger Execution
                         triggered = False
                         if po["side"] == "BUY" and ltp >= po["trigger_price"]:
                             triggered = True
@@ -646,20 +647,15 @@ def background_scanner():
 
         time.sleep(1)
 
-# =========================================================================
-# REALTIME OI MOVERS (ONLY F&O CASH STOCKS VIA GETMARKETDATA FULL)
-# =========================================================================
 def update_oi_stats():
     if not bot_state["is_logged_in"] or not bot_state["fno_stocks"]:
         return
 
     oi_list = []
-    # Loop over active F&O cash universe
     for s in bot_state["fno_stocks"][:75]:
         fut_token = s.get("fut_token")
         fut_sym = s.get("fut_symbol")
 
-        # 1st Priority: Read Live Future Contract Full Market Data for true Open Interest
         got_oi = False
         if fut_token and fut_sym:
             try:
@@ -685,7 +681,6 @@ def update_oi_stats():
             except Exception:
                 pass
 
-        # 2nd Priority Fallback: Direct Cash ltpData
         if not got_oi:
             try:
                 c_res = bot_state["smart_api"].ltpData("NSE", s["symbol"], str(s["token"]))
@@ -752,7 +747,6 @@ def market_data_monitor():
             last_stats_check = now_ts
             update_oi_stats()
 
-        # Monitor Active Positions
         open_trades = [t for t in bot_state["active_trades"] if t["status"] == "OPEN"]
         for trade in open_trades:
             try:
