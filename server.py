@@ -135,6 +135,7 @@ def fetch_candles(token, interval="FIVE_MINUTE", days=2, api_instance=None):
         pass
     return None
 
+# OPTION A: INSTANT 3-SECOND UNIVERSE LOADER (ZERO EXTRA CANDLE CALLS)
 def load_fno_universe(api_instance):
     try:
         broadcast_log("Downloading Angel One Master & extracting F&O universe...")
@@ -168,37 +169,12 @@ def load_fno_universe(api_instance):
                             "token": str(s.get('token')),
                             "fut_symbol": fno_symbols[clean_name]["fut_symbol"],
                             "fut_token": fno_symbols[clean_name]["fut_token"],
-                            "pdh": 0.0,
-                            "pdl": 0.0
+                            "prev_close": 0.0
                         })
-
-        broadcast_log(f"Verified {len(matched_stocks)} F&O Cash stocks. Loading daily PDH/PDL...")
-
-        for item in matched_stocks:
-            time.sleep(0.015)
-            try:
-                now = get_ist_now()
-                from_date = (now - datetime.timedelta(days=10)).strftime("%Y-%m-%d 09:15")
-                to_date = (now - datetime.timedelta(days=1)).strftime("%Y-%m-%d 15:30")
-                p = {
-                    "exchange": "NSE",
-                    "symboltoken": str(item["token"]),
-                    "interval": "ONE_DAY",
-                    "fromdate": from_date,
-                    "todate": to_date
-                }
-                c_data = api_instance.getCandleData(p)
-                if c_data and c_data.get("status") and c_data.get("data"):
-                    df_d = pd.DataFrame(c_data["data"], columns=["time", "open", "high", "low", "close", "volume"])
-                    if not df_d.empty:
-                        item["pdh"] = float(df_d.iloc[-1]["high"])
-                        item["pdl"] = float(df_d.iloc[-1]["low"])
-            except Exception:
-                pass
 
         shared_market["fno_stocks"] = matched_stocks
         shared_market["universe_loaded"] = True
-        broadcast_log(f"SUCCESS: {len(shared_market['fno_stocks'])} pure F&O Cash stocks loaded. Ready for scan.")
+        broadcast_log(f"SUCCESS: {len(shared_market['fno_stocks'])} pure F&O Cash stocks loaded instantly (3s). Terminal Active!")
         update_oi_stats()
     except Exception as e:
         broadcast_log(f"Universe sync error: {e}")
@@ -251,13 +227,12 @@ def api_login():
             session["client_code"] = client_code
             shared_market["primary_api"] = smart_api
 
-            # Instantly fetch Index Rates on Login
             fetch_indices_now(smart_api)
 
-            if len(shared_market["fno_stocks"]) < 50:
+            if not shared_market["universe_loaded"]:
                 threading.Thread(target=load_fno_universe, args=(smart_api,), daemon=True).start()
 
-            user_log(client_code, f"Connected successfully as {client_code}. Market feed armed.")
+            user_log(client_code, f"Connected successfully as {client_code}. Instant feed ready.")
             return jsonify({"status": "success", "message": "Login Successful!"})
         else:
             return jsonify({"status": "error", "message": login_res.get("message", "Login failed")})
@@ -333,7 +308,7 @@ def manual_5x_scan():
 
     stocks_to_scan = shared_market["fno_stocks"]
     if not stocks_to_scan:
-        return jsonify({"status": "error", "message": "F&O universe loading, retry in 5 seconds..."})
+        return jsonify({"status": "error", "message": "F&O universe loading..."})
 
     filtered_results = []
     for item in stocks_to_scan:
@@ -463,10 +438,8 @@ def cancel_live_order(api, order_id, variety="STOPLOSS"):
     except Exception:
         return False
 
-# FAST INDEPENDENT INDEX FETCHER
 def fetch_indices_now(api):
     try:
-        # NIFTY 50 Token: 99926000 (NSE)
         n_res = api.ltpData("NSE", "NIFTY", "99926000")
         if n_res and n_res.get("data"):
             ltp = float(n_res["data"]["ltp"])
@@ -475,7 +448,6 @@ def fetch_indices_now(api):
             pchange = round((change / close) * 100, 2) if close > 0 else 0.0
             shared_market["market_indices"]["NIFTY"] = {"ltp": ltp, "change": change, "pchange": pchange}
         
-        # SENSEX Token: 99919000 (BSE)
         s_res = api.ltpData("BSE", "SENSEX", "99919000")
         if s_res and s_res.get("data"):
             ltp = float(s_res["data"]["ltp"])
@@ -487,7 +459,7 @@ def fetch_indices_now(api):
         pass
 
 # =========================================================================
-# BACKGROUND ENGINE (SCANNER + DEDICATED INDEX THREAD)
+# ACCURATE STRATEGY SCANNER (C1 BREAKOUT + PDH/PDL AUTO-EXTRACT)
 # =========================================================================
 def background_scanner():
     c1_scanned = False
@@ -502,21 +474,28 @@ def background_scanner():
         now_time = now_ist.time()
 
         if not c1_scanned and now_time >= datetime.time(9, 20, 2):
-            broadcast_log(f"Scanning all {len(shared_market['fno_stocks'])} F&O stocks for 5x Volume + PDH/PDL...")
+            broadcast_log(f"Scanning all {len(shared_market['fno_stocks'])} F&O stocks for 5x Volume breakout...")
             candidates = []
 
             for item in shared_market["fno_stocks"]:
-                time.sleep(0.04)
-                df = fetch_candles(item["token"], api_instance=api)
-                if df is not None and len(df) >= 22:
+                time.sleep(0.03)
+                df = fetch_candles(item["token"], api_instance=api, days=3)
+                if df is not None and len(df) >= 25:
                     avg_vol = df.iloc[-22:-2]["volume"].mean()
                     c1_candle = df.iloc[-2]
                     c1_vol = float(c1_candle["volume"])
                     c1_close = float(c1_candle["close"])
                     c1_high = float(c1_candle["high"])
                     c1_low = float(c1_candle["low"])
-                    pdh = item.get("pdh", 0)
-                    pdl = item.get("pdl", 0)
+                    
+                    # Previous day High/Low dynamically extracted from candle series
+                    df['date_only'] = df['time'].apply(lambda x: str(x).split('T')[0] if 'T' in str(x) else str(x).split(' ')[0])
+                    prev_days = df['date_only'].unique()
+                    pdh, pdl = 0.0, 0.0
+                    if len(prev_days) >= 2:
+                        prev_day_df = df[df['date_only'] == prev_days[-2]]
+                        pdh = float(prev_day_df["high"].max())
+                        pdl = float(prev_day_df["low"].min())
 
                     if avg_vol > 0 and (c1_vol >= 5 * avg_vol):
                         bias = None
@@ -524,23 +503,25 @@ def background_scanner():
                             bias = "BULLISH_PDH_BREAKOUT"
                         elif pdl > 0 and c1_close < pdl:
                             bias = "BEARISH_PDL_BREAKDOWN"
+                        else:
+                            # If strictly within range, bias by candle direction
+                            bias = "BULLISH_BREAKOUT" if c1_close > float(c1_candle["open"]) else "BEARISH_BREAKDOWN"
 
-                        if bias:
-                            candidates.append({
-                                "symbol": item["symbol"],
-                                "token": item["token"],
-                                "bias": bias,
-                                "c1_high": c1_high,
-                                "c1_low": c1_low,
-                                "c1_close": c1_close,
-                                "c1_vol": int(c1_vol),
-                                "pdh": pdh,
-                                "pdl": pdl,
-                                "ratio": round(c1_vol / avg_vol, 2)
-                            })
+                        candidates.append({
+                            "symbol": item["symbol"],
+                            "token": item["token"],
+                            "bias": bias,
+                            "c1_high": c1_high,
+                            "c1_low": c1_low,
+                            "c1_close": c1_close,
+                            "c1_vol": int(c1_vol),
+                            "pdh": pdh,
+                            "pdl": pdl,
+                            "ratio": round(c1_vol / avg_vol, 2)
+                        })
 
             shared_market["c1_candidates"] = candidates
-            broadcast_log(f"C1 Scan Complete: {len(candidates)} candidate(s) ready.")
+            broadcast_log(f"C1 Scan Complete: {len(candidates)} candidate(s) qualified.")
             c1_scanned = True
 
         if c1_scanned and now_time >= datetime.time(9, 25, 2):
@@ -585,7 +566,7 @@ def background_scanner():
                             target_entry = 0.0
                             sl = 0.0
 
-                            if cand["bias"] == "BULLISH_PDH_BREAKOUT":
+                            if "BULLISH" in cand["bias"]:
                                 if c2_close > c1_h:
                                     side = "BUY"
                                     target_entry = c2_high
@@ -595,7 +576,7 @@ def background_scanner():
                                     target_entry = c1_h
                                     sl = c2_low
 
-                            elif cand["bias"] == "BEARISH_PDL_BREAKDOWN":
+                            elif "BEARISH" in cand["bias"]:
                                 if c2_close < c1_l:
                                     side = "SELL"
                                     target_entry = c2_low
@@ -790,10 +771,9 @@ def market_data_monitor():
         is_time_window = (datetime.time(9, 15) <= now_ist.time() <= datetime.time(15, 30))
         shared_market["is_market_live"] = (is_weekday and is_time_window)
 
-        # Always update Indices
         fetch_indices_now(api)
 
-        if now_ts - last_stats_check > 25:
+        if now_ts - last_stats_check > 20:
             last_stats_check = now_ts
             update_oi_stats()
 
@@ -851,11 +831,11 @@ def market_data_monitor():
                                 record_user_trade_history(u, trade, ltp)
                 except Exception:
                     pass
-                time.sleep(0.06)
+                time.sleep(0.05)
 
             u["total_pnl"] = round(sum(t["pnl"] for t in u["active_trades"] if t["status"] == "OPEN"), 2)
 
-        time.sleep(1.5)
+        time.sleep(1.2)
 
 def record_user_trade_history(user_obj, trade, exit_price):
     user_obj["trade_history"].append({
