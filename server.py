@@ -13,7 +13,7 @@ from SmartApi import SmartConnect
 app = Flask(__name__)
 
 IST = tz.gettz('Asia/Kolkata')
-CONFIG_FILE = "bot_config.json"
+CONFIG_FILE = os.environ.get("CONFIG_FILE", "bot_config.json")
 
 def get_ist_now():
     return datetime.datetime.now(IST)
@@ -658,7 +658,8 @@ def background_scanner():
                                     "pdh": pdh,
                                     "pdl": pdl,
                                     "ratio": round(c1_vol / sma20_vol, 2),
-                                    "order_state": "READY"
+                                    "order_state": "READY FOR TRADE",
+                                    "display_status": "READY FOR TRADE"
                                 })
                                 log(f"Setup Qualified: {item['symbol']} ({round(c1_vol/sma20_vol, 2)}x Vol) [{bias}] PDH:{pdh} PDL:{pdl}")
 
@@ -675,7 +676,7 @@ def background_scanner():
                     if (active_open_count + pending_count) >= bot_state["max_trades"]:
                         break
 
-                    if cand.get("order_state") != "READY":
+                    if cand.get("order_state") not in ["READY FOR TRADE"]:
                         continue
 
                     df = fetch_candles(cand["token"], days=2)
@@ -744,8 +745,9 @@ def background_scanner():
                                 is_beyond_one_to_one = True
 
                             if is_beyond_one_to_one:
-                                cand["order_state"] = "IGNORED_1_TO_1"
-                                log(f"Late Login Check: {cand['symbol']} moved past 1:1. Ignored.")
+                                cand["order_state"] = "BLOCKED_1_TO_1"
+                                cand["display_status"] = "CROSSED MORE THAN 1:1"
+                                log(f"Late Check: {cand['symbol']} crossed more than 1:1. Ignored.")
                                 continue
 
                             order_type = "STOPLOSS_MARKET"
@@ -766,7 +768,12 @@ def background_scanner():
                                     limit_price=target_entry if order_type == "LIMIT" else 0.0
                                 )
 
-                            cand["order_state"] = "PENDING_PLACED"
+                            if order_type == "STOPLOSS_MARKET":
+                                cand["order_state"] = "ARMED"
+                                cand["display_status"] = "SL-M ORDER PLACED"
+                            else:
+                                cand["order_state"] = "ARMED"
+                                cand["display_status"] = "LIMIT ORDER PLACED"
 
                             bot_state["pending_orders"].append({
                                 "id": len(bot_state["pending_orders"]) + 1,
@@ -789,7 +796,7 @@ def background_scanner():
                                 "time": get_ist_now().strftime("%I:%M:%S %p")
                             })
                             pending_count += 1
-                            log(f"Order Armed [{mode} | {order_type}]: {side} {cand['symbol']} Level@{target_entry} (LTP: ₹{current_ltp})")
+                            log(f"Order Armed [{mode} | {order_type}]: {side} {cand['symbol']} Level@{target_entry}")
 
             for po in bot_state["pending_orders"]:
                 if po["status"] != "PENDING":
@@ -811,10 +818,13 @@ def background_scanner():
                         if is_invalid:
                             po["status"] = "CANCELLED_INVALID"
                             cancel_live_order(po.get("order_id"), po.get("variety", "STOPLOSS"))
+                            
                             for c in bot_state["c1_candidates"]:
                                 if c["symbol"] == po["symbol"]:
-                                    c["order_state"] = "INVALIDATED"
-                            log(f"⚠️ SETUP INVALIDATED: {po['symbol']} cancelled! ({reason}). Rotating to next stock...")
+                                    c["order_state"] = "PERMANENTLY_INVALID"
+                                    c["display_status"] = "INVALID"
+                                    
+                            log(f"⚠️ STRICT INVALIDATION: {po['symbol']} marked INVALID for full day! ({reason}).")
                             continue
 
                         triggered = False
@@ -831,6 +841,11 @@ def background_scanner():
 
                         if triggered:
                             po["status"] = "TRIGGERED"
+                            for c in bot_state["c1_candidates"]:
+                                if c["symbol"] == po["symbol"]:
+                                    c["order_state"] = "IN_POSITION"
+                                    c["display_status"] = "POSITION OPEN"
+
                             bot_state["active_trades"].append({
                                 "id": len(bot_state["active_trades"]) + 1,
                                 "symbol": po["symbol"],
@@ -859,9 +874,6 @@ def background_scanner():
 
         time.sleep(1)
 
-# =========================================================================
-# PATH 2: MULTI-EXPIRY CUMULATIVE FUTURES OI CALCULATION (NSE MATCHED)
-# =========================================================================
 def update_oi_stats():
     if not bot_state["is_logged_in"] or not bot_state["fno_stocks"]:
         return
