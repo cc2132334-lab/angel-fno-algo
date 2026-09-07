@@ -61,7 +61,7 @@
         .status-box { background: rgba(56, 189, 248, 0.08); color: var(--accent); padding: 10px; border-radius: 8px; font-size: 0.8rem; font-family: monospace; border: 1px dashed var(--accent); margin-bottom: 12px; }
 
         .tabs { display: flex; gap: 6px; margin-bottom: 10px; overflow-x: auto; }
-        .tab-btn { flex: 1; padding: 8px; font-size: 0.75rem; background: var(--card-bg); border: 1px solid var(--border); color: var(--text-muted); border-radius: 6px; white-space: nowrap; margin-top: 0; }
+        .tab-btn { flex: 1; padding: 8px; font-size: 0.72rem; background: var(--card-bg); border: 1px solid var(--border); color: var(--text-muted); border-radius: 6px; white-space: nowrap; margin-top: 0; }
         .tab-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
 
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
@@ -189,7 +189,30 @@
             </div>
         </div>
 
-        <!-- RE-CALIBRATED MANUAL 5X SCANNER -->
+        <!-- NEW: BOT QUALIFIED SETUPS WINDOW -->
+        <div class="card" style="border: 1px solid var(--accent);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <h2>🎯 Bot Qualified Setups (Live Watch)</h2>
+                <span id="qualified-count" style="font-size: 0.75rem; font-weight: bold; color: var(--accent);">0 Setups</span>
+            </div>
+            <p style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 6px;">09:20 AM C1 Volume SMA20 5x + Strict PDH/PDL filter pass karne wale verified stocks:</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Bias Direction</th>
+                        <th>C1 Range</th>
+                        <th>PDH / PDL</th>
+                        <th>Volume Burst</th>
+                        <th>State</th>
+                    </tr>
+                </thead>
+                <tbody id="qualified-body">
+                    <tr><td colspan="6" style="text-align:center; color: var(--text-muted);">Waiting for 09:20 AM setup qualification...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
         <div class="card">
             <h2>🔍 Manual 5x Volume Scanner (F&O Cash Only)</h2>
             <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 8px;">Date select karke 9:15-9:20 AM C1 candle ka 5x Volume breakout scan karein.</p>
@@ -225,15 +248,26 @@
             </div>
         </div>
 
+        <!-- ENHANCED: 4-TAB SORTED OPEN INTEREST & OI SPURTS WATCH -->
         <div class="card">
-            <h2>📈 Top Open Interest Movers (Watch Only)</h2>
+            <h2>📈 Open Interest & OI Spurts (Watch Only)</h2>
             <div class="tabs" id="oi-tabs">
-                <button class="tab-btn active" onclick="switchOITab('gainers', this)">🚀 Top OI Gainers</button>
-                <button class="tab-btn" onclick="switchOITab('losers', this)">🔻 Top OI Losers</button>
+                <button class="tab-btn active" onclick="switchOITab('gainers', this)">🚀 OI Gainers</button>
+                <button class="tab-btn" onclick="switchOITab('losers', this)">🔻 OI Losers</button>
+                <button class="tab-btn" onclick="switchOITab('spurts_g', this)">⚡ OI Spurts (Bull)</button>
+                <button class="tab-btn" onclick="switchOITab('spurts_l', this)">🔻 OI Spurts (Bear)</button>
             </div>
             <table>
-                <thead><tr><th>Symbol</th><th>LTP</th><th>OI Chg %</th><th>Open Interest</th></tr></thead>
-                <tbody id="oi-body"><tr><td colspan="4" style="text-align:center; color: var(--text-muted);">Loading live Open Interest data...</td></tr></tbody>
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>LTP</th>
+                        <th>Price Chg %</th>
+                        <th>OI Chg % (Sorted)</th>
+                        <th>Open Interest</th>
+                    </tr>
+                </thead>
+                <tbody id="oi-body"><tr><td colspan="5" style="text-align:center; color: var(--text-muted);">Loading live Open Interest data...</td></tr></tbody>
             </table>
         </div>
 
@@ -254,8 +288,8 @@
 
             <div id="pending-view" style="display: none;">
                 <table>
-                    <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>SL-M Trigger</th><th>Inval Level</th><th>Qty</th><th>Status</th></tr></thead>
-                    <tbody id="pending-body"><tr><td colspan="7" style="text-align:center; color: var(--text-muted);">No pending SL-M orders</td></tr></tbody>
+                    <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Trigger</th><th>Inval Level</th><th>Qty</th><th>Status</th></tr></thead>
+                    <tbody id="pending-body"><tr><td colspan="7" style="text-align:center; color: var(--text-muted);">No pending orders</td></tr></tbody>
                 </table>
             </div>
 
@@ -349,7 +383,7 @@
             const summaryElem = document.getElementById('scan-summary');
             const tableBody = document.getElementById('manual-scan-body');
 
-            scanBtn.innerText = "Scanning 200+ stocks...";
+            scanBtn.innerText = "Scanning...";
             scanBtn.disabled = true;
             stopBtn.style.display = 'inline-block';
             resultBox.style.display = 'block';
@@ -524,32 +558,72 @@
             const pool = cachedState.market_stats;
             if(!pool) return;
 
-            let list = (currentOITab === 'gainers') ? (pool.top_oi_gainers || []) : (pool.top_oi_losers || []);
+            let list = [];
+            if(currentOITab === 'gainers') list = pool.top_oi_gainers || [];
+            else if(currentOITab === 'losers') list = pool.top_oi_losers || [];
+            else if(currentOITab === 'spurts_g') list = pool.oi_spurts_gainers || [];
+            else if(currentOITab === 'spurts_l') list = pool.oi_spurts_losers || [];
 
             if(!list || list.length === 0) {
-                document.getElementById('oi-body').innerHTML = `<tr><td colspan="4" style="text-align:center; color:var(--text-muted);">Loading live Open Interest data...</td></tr>`;
+                document.getElementById('oi-body').innerHTML = `<tr><td colspan="5" style="text-align:center; color:var(--text-muted);">No data in this category right now...</td></tr>`;
                 return;
             }
 
             let html = '';
             list.forEach(item => {
-                const cls = item.oi_change >= 0 ? 'up-text' : 'down-text';
-                const sign = item.oi_change >= 0 ? '+' : '';
+                const pCls = item.pchange >= 0 ? 'up-text' : 'down-text';
+                const pSign = item.pchange >= 0 ? '+' : '';
+                const oiCls = item.oi_change >= 0 ? 'up-text' : 'down-text';
+                const oiSign = item.oi_change >= 0 ? '+' : '';
+
                 html += `<tr>
                     <td><b>${item.symbol}</b></td>
                     <td>₹${item.ltp}</td>
-                    <td class="${cls}"><b>${sign}${item.oi_change}%</b></td>
+                    <td class="${pCls}"><b>${pSign}${item.pchange}%</b></td>
+                    <td class="${oiCls}"><b>${oiSign}${item.oi_change}%</b></td>
                     <td><span class="highlight-oi">${item.oi.toLocaleString()}</span></td>
                 </tr>`;
             });
             document.getElementById('oi-body').innerHTML = html;
         }
 
+        function renderQualifiedSetups() {
+            if(!cachedState) return;
+            const candidates = cachedState.c1_candidates || [];
+            document.getElementById('qualified-count').innerText = `${candidates.length} Setup(s)`;
+
+            if(candidates.length === 0) {
+                document.getElementById('qualified-body').innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No setups qualified today yet (Scanned at 09:20 AM)</td></tr>`;
+                return;
+            }
+
+            let html = '';
+            candidates.forEach(c => {
+                const isBull = c.bias.includes("BULLISH");
+                const tag = isBull ? '<span class="tag-buy">BULLISH BREAKOUT</span>' : '<span class="tag-sell">BEARISH BREAKDOWN</span>';
+                const pdLevel = isBull ? `PDH: ₹${c.pdh}` : `PDL: ₹${c.pdl}`;
+                
+                let stateBadge = `<span class="tag-pending">${c.order_state}</span>`;
+                if(c.order_state === 'PENDING_PLACED') stateBadge = `<span class="tag-buy">ARMED</span>`;
+                if(c.order_state === 'INVALIDATED') stateBadge = `<span class="tag-invalid">INVALID</span>`;
+
+                html += `<tr>
+                    <td><b>${c.symbol.replace('-EQ','')}</b></td>
+                    <td>${tag}</td>
+                    <td>H: ₹${c.c1_high} | L: ₹${c.c1_low}</td>
+                    <td><b>${pdLevel}</b></td>
+                    <td><span class="highlight-oi">${c.ratio}x SMA20</span></td>
+                    <td>${stateBadge}</td>
+                </tr>`;
+            });
+            document.getElementById('qualified-body').innerHTML = html;
+        }
+
         function renderPending() {
             if(!cachedState) return;
             const pendings = cachedState.pending_orders || [];
             if(pendings.length === 0) {
-                document.getElementById('pending-body').innerHTML = `<tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No pending SL-M orders</td></tr>`;
+                document.getElementById('pending-body').innerHTML = `<tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No pending orders</td></tr>`;
                 return;
             }
             let html = '';
@@ -563,7 +637,7 @@
                 html += `<tr>
                     <td><small style="color:var(--text-muted)">${p.time}</small></td>
                     <td><b>${p.symbol}</b></td>
-                    <td><span class="${sideClass}">${p.side}</span></td>
+                    <td><span class="${sideClass}">${p.side}</span> <small>(${p.order_type})</small></td>
                     <td>₹${p.trigger_price}</td>
                     <td style="color:#ef4444; font-weight:bold;">${invalTxt}</td>
                     <td>${p.qty}</td>
@@ -647,6 +721,7 @@
                 pnlElem.innerText = (data.total_pnl >= 0 ? '+₹' : '-₹') + Math.abs(data.total_pnl);
                 pnlElem.style.color = data.total_pnl >= 0 ? 'var(--up)' : 'var(--down)';
 
+                renderQualifiedSetups();
                 renderOIStats();
 
                 if(data.active_trades && data.active_trades.length > 0) {
