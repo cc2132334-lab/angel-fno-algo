@@ -14,7 +14,6 @@ ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
 ADMIN_PASS = os.environ.get("ADMIN_PASS", "admin@123")
 DB_FILE = "users.db"
 
-# Running child bot processes: { "username": {"port": 5001, "proc": PopenObject} }
 running_instances = {}
 
 def init_db():
@@ -31,7 +30,6 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Column check for existing tables
     c.execute("PRAGMA table_info(users)")
     cols = [info[1] for info in c.fetchall()]
     if "expiry_date" not in cols:
@@ -114,7 +112,6 @@ def portal_login():
         conn.close()
         return render_template('login.html', view="login", error="Invalid Password.")
 
-    # Expiry Check
     if is_expired(expiry_date):
         c.execute("UPDATE users SET status = 'BLOCKED' WHERE id = ?", (uid,))
         conn.commit()
@@ -183,7 +180,6 @@ def admin_panel():
             "expired": expired, "created_at": u[6], "is_live": is_live
         })
 
-    # Default date in add-user form: 30 days from today
     default_exp = (datetime.date.today() + datetime.timedelta(days=30)).strftime("%Y-%m-%d")
     return render_template('login.html', view="admin", users=user_list, default_exp=default_exp)
 
@@ -250,6 +246,39 @@ def admin_toggle_status(user_id):
     conn.close()
     return redirect('/admin')
 
+@app.route('/admin/delete-user/<int:user_id>')
+def admin_delete_user(user_id):
+    if not session.get("is_admin"):
+        return jsonify({"status": "error", "message": "Unauthorized"}), 403
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT username FROM users WHERE id = ?", (user_id,))
+    row = c.fetchone()
+    if row:
+        uname = row[0]
+        c.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
+
+        # Stop background bot process if running
+        if uname in running_instances:
+            try:
+                running_instances[uname]["proc"].terminate()
+            except Exception:
+                pass
+            running_instances.pop(uname, None)
+
+        # Remove user's individual bot config file
+        user_conf = f"bot_config_{uname}.json"
+        if os.path.exists(user_conf):
+            try:
+                os.remove(user_conf)
+            except Exception:
+                pass
+
+    conn.close()
+    return redirect('/admin')
+
 # ================= MASTER PROXY ROUTER =================
 
 @app.route('/', defaults={'path': ''}, methods=['GET', 'POST', 'PUT', 'DELETE'])
@@ -276,7 +305,6 @@ def master_proxy_handler(path):
 
     uid, status, expiry_date = row
     
-    # Active runtime expiry validation
     if is_expired(expiry_date):
         c.execute("UPDATE users SET status = 'BLOCKED' WHERE id = ?", (uid,))
         conn.commit()
