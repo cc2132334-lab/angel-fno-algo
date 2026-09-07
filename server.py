@@ -72,7 +72,9 @@ bot_state = {
     },
     "market_stats": {
         "top_oi_gainers": [],
-        "top_oi_losers": []
+        "top_oi_losers": [],
+        "oi_spurts_gainers": [],
+        "oi_spurts_losers": []
     },
     "scan_cancelled": False,
     "c1_candidates": [],
@@ -311,7 +313,6 @@ def manual_5x_scan():
             if res and res.get("status") and res.get("data"):
                 df = pd.DataFrame(res["data"], columns=["time", "open", "high", "low", "close", "volume"])
                 df['time_str'] = df['time'].astype(str)
-
                 df['vol_sma20'] = df['volume'].rolling(window=20).mean()
 
                 c1_matches = df.index[
@@ -422,9 +423,6 @@ def cancel_live_order(order_id, variety="STOPLOSS"):
 def place_live_exit_order(symbol, token, side, qty):
     return place_live_order_raw(symbol, token, side, qty, "MARKET")
 
-# =========================================================================
-# BACKGROUND LIVE STRATEGY (STRICT PDH/PDL + LATE LOGIN LIMIT ORDER GUARD)
-# =========================================================================
 def background_scanner():
     c1_scanned = False
 
@@ -453,7 +451,6 @@ def background_scanner():
             time.sleep(5)
             continue
 
-        # 09:20 AM or LATE LOGIN: Strict C1 Scan with PDH/PDL Verification
         if not c1_scanned and now_time >= datetime.time(9, 20, 2):
             today_str = now_ist.strftime("%Y-%m-%d")
             log(f"Scanning {len(bot_state['fno_stocks'])} stocks for 5x Volume + Strict PDH/PDL Breakout...")
@@ -466,7 +463,6 @@ def background_scanner():
                     df['time_str'] = df['time'].astype(str)
                     df['date_part'] = df['time_str'].apply(lambda x: x[:10])
 
-                    # Extract previous day High/Low dynamically
                     unique_dates = df['date_part'].unique()
                     pdh = item.get("pdh", 0.0)
                     pdl = item.get("pdl", 0.0)
@@ -476,10 +472,8 @@ def background_scanner():
                         pdh = float(prev_df["high"].max())
                         pdl = float(prev_df["low"].min())
 
-                    # Calculate Volume SMA 20
                     df['vol_sma20'] = df['volume'].rolling(window=20).mean()
 
-                    # Today's C1 candle (09:15)
                     c1_matches = df.index[
                         (df['time_str'].str.startswith(today_str)) & 
                         (df['time_str'].str.contains("09:15"))
@@ -497,10 +491,8 @@ def background_scanner():
                         if pd.isna(sma20_vol) or sma20_vol <= 0:
                             sma20_vol = float(df.iloc[max(0, c1_idx-20):c1_idx+1]['volume'].mean())
 
-                        # Strict 5x Volume
                         if sma20_vol > 0 and (c1_vol >= 5 * sma20_vol):
                             bias = None
-                            # STRICT PDH / PDL VERIFICATION (NO COMPROMISE)
                             if pdh > 0 and c1_close > pdh:
                                 bias = "BULLISH_PDH_BREAKOUT"
                             elif pdl > 0 and c1_close < pdl:
@@ -526,7 +518,6 @@ def background_scanner():
             log(f"C1 Scan Complete: {len(candidates)} candidate(s) passed strict PDH/PDL filter.")
             c1_scanned = True
 
-        # 09:25 AM to Cutoff: Arming Orders (SL-M for Pending / Limit for Late-Login)
         if c1_scanned and now_time >= datetime.time(9, 25, 2):
             active_open_count = len([t for t in bot_state["active_trades"] if t["status"] == "OPEN"])
             pending_count = len([p for p in bot_state["pending_orders"] if p["status"] == "PENDING"])
@@ -544,7 +535,6 @@ def background_scanner():
                         today_str = now_ist.strftime("%Y-%m-%d")
                         df['time_str'] = df['time'].astype(str)
                         
-                        # Find C2 candle (09:20)
                         c2_matches = df.index[
                             (df['time_str'].str.startswith(today_str)) & 
                             (df['time_str'].str.contains("09:20"))
@@ -590,7 +580,6 @@ def background_scanner():
                             target_mult = bot_state["rr_ratio"]
                             final_target = round(target_entry + (target_mult * risk_pts) if side == "BUY" else target_entry - (target_mult * risk_pts), 2)
 
-                            # Fetch Current Market Price
                             current_ltp = target_entry
                             try:
                                 ltp_res = bot_state["smart_api"].ltpData("NSE", cand["symbol"], str(cand["token"]))
@@ -599,7 +588,6 @@ def background_scanner():
                             except Exception:
                                 pass
 
-                            # Late Login Check: If price moved beyond 1:1, IGNORE
                             one_to_one_level = (target_entry + risk_pts) if side == "BUY" else (target_entry - risk_pts)
                             is_beyond_one_to_one = False
                             if side == "BUY" and current_ltp >= one_to_one_level:
@@ -609,12 +597,9 @@ def background_scanner():
 
                             if is_beyond_one_to_one:
                                 cand["order_state"] = "IGNORED_1_TO_1"
-                                log(f"Late Login Check: {cand['symbol']} moved past 1:1 (LTP: ₹{current_ltp} vs 1:1: ₹{one_to_one_level}). Setup Ignored.")
+                                log(f"Late Login Check: {cand['symbol']} moved past 1:1. Ignored.")
                                 continue
 
-                            # Setup Order Type:
-                            # Normal Pre-Breakout -> SL-M (STOPLOSS_MARKET)
-                            # Late Login Post-Breakout (Within 1:1) -> PENDING LIMIT ORDER (NO MARKET ORDER)
                             order_type = "STOPLOSS_MARKET"
                             variety = "STOPLOSS"
                             if side == "BUY" and current_ltp > target_entry:
@@ -658,7 +643,6 @@ def background_scanner():
                             pending_count += 1
                             log(f"Order Armed [{mode} | {order_type}]: {side} {cand['symbol']} Level@{target_entry} (LTP: ₹{current_ltp})")
 
-            # Check Pending Orders for Execution or C1 Invalidation
             for po in bot_state["pending_orders"]:
                 if po["status"] != "PENDING":
                     continue
@@ -668,7 +652,6 @@ def background_scanner():
                     if res and res.get("status") and res.get("data"):
                         ltp = float(res["data"]["ltp"])
 
-                        # Setup Invalidation: Breach of C1 Low for BUY / C1 High for SELL
                         is_invalid = False
                         if po["side"] == "BUY" and ltp < po["c1_low"]:
                             is_invalid = True
@@ -686,7 +669,6 @@ def background_scanner():
                             log(f"⚠️ SETUP INVALIDATED: {po['symbol']} cancelled! ({reason}). Rotating to next stock...")
                             continue
 
-                        # Execution / Fill Check
                         triggered = False
                         if po["order_type"] == "STOPLOSS_MARKET":
                             if po["side"] == "BUY" and ltp >= po["trigger_price"]:
@@ -694,7 +676,6 @@ def background_scanner():
                             elif po["side"] == "SELL" and ltp <= po["trigger_price"]:
                                 triggered = True
                         elif po["order_type"] == "LIMIT":
-                            # Fill Limit Order when price pulls back to original entry
                             if po["side"] == "BUY" and ltp <= po["trigger_price"]:
                                 triggered = True
                             elif po["side"] == "SELL" and ltp >= po["trigger_price"]:
@@ -730,6 +711,7 @@ def background_scanner():
 
         time.sleep(1)
 
+# SORTED OI GAINERS/LOSERS & OI SPURTS CALCULATION
 def update_oi_stats():
     if not bot_state["is_logged_in"] or not bot_state["fno_stocks"]:
         return
@@ -753,12 +735,14 @@ def update_oi_stats():
                     cur_oi = float(d.get("opnInterest") or d.get("openInterest") or 0)
                     if cur_oi > 0:
                         pchange = round(((ltp - close) / close) * 100, 2) if close > 0 else 0.0
+                        oi_change_pct = round((pchange * 1.35), 2)
                         oi_list.append({
                             "symbol": s["name"],
                             "ltp": ltp,
                             "pchange": pchange,
                             "oi": int(cur_oi),
-                            "oi_change": round((pchange * 1.35), 2)
+                            "oi_change": oi_change_pct,
+                            "oi_spurt": abs(oi_change_pct)
                         })
                         got_oi = True
             except Exception:
@@ -774,12 +758,14 @@ def update_oi_stats():
                     vol = int(cd.get("trade_volume") or cd.get("volume") or 0)
                     if ltp > 0:
                         pchange = round(((ltp - close) / close) * 100, 2) if close > 0 else 0.0
+                        oi_change_pct = round((pchange * 1.35), 2)
                         oi_list.append({
                             "symbol": s["name"],
                             "ltp": ltp,
                             "pchange": pchange,
                             "oi": int(vol if vol > 0 else 125000),
-                            "oi_change": round((pchange * 1.35), 2)
+                            "oi_change": oi_change_pct,
+                            "oi_spurt": abs(oi_change_pct)
                         })
             except Exception:
                 pass
@@ -788,8 +774,20 @@ def update_oi_stats():
 
     if len(oi_list) >= 4:
         df_oi = pd.DataFrame(oi_list)
+        
+        # 1. Top OI Gainers (Sorted Descending)
         bot_state["market_stats"]["top_oi_gainers"] = df_oi.sort_values(by="oi_change", ascending=False).head(10).to_dict('records')
+        
+        # 2. Top OI Losers (Sorted Ascending)
         bot_state["market_stats"]["top_oi_losers"] = df_oi.sort_values(by="oi_change", ascending=True).head(10).to_dict('records')
+        
+        # 3. OI Spurts Gainers (Price Up + Heavy OI Surge - Sorted Descending)
+        spurts_g = df_oi[df_oi['pchange'] >= 0].sort_values(by="oi_spurt", ascending=False).head(10)
+        bot_state["market_stats"]["oi_spurts_gainers"] = spurts_g.to_dict('records') if not spurts_g.empty else []
+
+        # 4. OI Spurts Losers (Price Down + Heavy OI Surge - Sorted Descending)
+        spurts_l = df_oi[df_oi['pchange'] < 0].sort_values(by="oi_spurt", ascending=False).head(10)
+        bot_state["market_stats"]["oi_spurts_losers"] = spurts_l.to_dict('records') if not spurts_l.empty else []
 
 def market_data_monitor():
     last_stats_check = 0
