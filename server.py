@@ -76,7 +76,6 @@ bot_state = {
         "oi_spurts_gainers": [],
         "oi_spurts_losers": []
     },
-    # ASYNC MANUAL SCANNERS STATE (BACKGROUND PROCESSED)
     "manual_scan_state": {
         "is_running": False,
         "scan_cancelled": False,
@@ -164,7 +163,7 @@ def fetch_daily_pdh_pdl(token):
 
 def load_fno_universe():
     try:
-        log("Downloading Angel One Master & strictly filtering F&O Cash stocks...")
+        log("Downloading Angel One Master & mapping multi-expiry futures...")
         url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
         res = requests.get(url, timeout=25)
         master = res.json()
@@ -175,10 +174,12 @@ def load_fno_universe():
                 base_name = str(s.get('name', '')).strip().upper()
                 if base_name and "TEST" not in base_name:
                     if base_name not in fno_futures:
-                        fno_futures[base_name] = {
-                            "fut_symbol": s.get('symbol'),
-                            "fut_token": str(s.get('token'))
-                        }
+                        fno_futures[base_name] = []
+                    fno_futures[base_name].append({
+                        "symbol": s.get('symbol'),
+                        "token": str(s.get('token')),
+                        "expiry": s.get('expiry', '')
+                    })
 
         matched_stocks = []
         for s in master:
@@ -189,15 +190,18 @@ def load_fno_universe():
                     if "TEST" in clean_name or "NSETEST" in clean_name:
                         continue
                     if clean_name in fno_futures:
+                        contracts = fno_futures[clean_name]
+                        near_contract = contracts[0]
                         matched_stocks.append({
                             "symbol": sym,
                             "name": clean_name,
                             "token": str(s.get('token')),
-                            "fut_symbol": fno_futures[clean_name]["fut_symbol"],
-                            "fut_token": fno_futures[clean_name]["fut_token"]
+                            "fut_symbol": near_contract["symbol"],
+                            "fut_token": near_contract["token"],
+                            "all_fut_tokens": [c["token"] for c in contracts[:3]]
                         })
 
-        log(f"Verified {len(matched_stocks)} pure F&O Cash stocks. Loading PDH, PDL baselines...")
+        log(f"Verified {len(matched_stocks)} pure F&O Cash stocks. Loading baselines...")
 
         final_list = []
         for item in matched_stocks:
@@ -213,7 +217,8 @@ def load_fno_universe():
                 "last_daily_vol": last_vol or 0,
                 "avg_5d_vol": avg_vol if avg_vol > 0 else 1.0,
                 "fut_symbol": item["fut_symbol"],
-                "fut_token": item["fut_token"]
+                "fut_token": item["fut_token"],
+                "all_fut_tokens": item["all_fut_tokens"]
             })
 
         bot_state["fno_stocks"] = final_list
@@ -285,10 +290,6 @@ def set_mode():
         return jsonify({"status": "success", "mode": mode})
     return jsonify({"status": "error"})
 
-# =========================================================================
-# ASYNC BACKGROUND 5X SCANNER (THREADED: PREVENTS CHROME MINIMIZE FREEZE)
-# SYNCED STRICTLY WITH BOT STRATEGY (C1 5x VOL SMA20 + STRICT PDH/PDL)
-# =========================================================================
 def worker_run_manual_5x_scan(selected_date):
     st = bot_state["manual_scan_state"]
     st["is_running"] = True
@@ -332,7 +333,6 @@ def worker_run_manual_5x_scan(selected_date):
                 df['time_str'] = df['time'].astype(str)
                 df['date_part'] = df['time_str'].apply(lambda x: x[:10])
 
-                # Dynamic PDH/PDL extraction from previous trading day
                 unique_dates = df['date_part'].unique().tolist()
                 pdh = item.get("pdh", 0.0)
                 pdl = item.get("pdl", 0.0)
@@ -344,10 +344,8 @@ def worker_run_manual_5x_scan(selected_date):
                         pdh = float(prev_df["high"].max())
                         pdl = float(prev_df["low"].min())
 
-                # Strict Rolling SMA 20 Volume
                 df['vol_sma20'] = df['volume'].rolling(window=20).mean()
 
-                # Find Exact C1 Candle (09:15 AM)
                 c1_matches = df.index[
                     (df['time_str'].str.startswith(selected_date)) & 
                     (df['time_str'].str.contains("09:15"))
@@ -365,7 +363,6 @@ def worker_run_manual_5x_scan(selected_date):
                     if pd.isna(sma20_vol) or sma20_vol <= 0:
                         sma20_vol = float(df.iloc[max(0, c1_idx-20):c1_idx+1]['volume'].mean())
 
-                    # EXACT BOT CONDITION: 5x SMA20 Volume AND Strict PDH/PDL Breakout
                     if sma20_vol > 0 and (c1_vol >= 5 * sma20_vol):
                         bias = None
                         if pdh > 0 and c1_close > pdh:
@@ -374,7 +371,6 @@ def worker_run_manual_5x_scan(selected_date):
                             bias = "BEARISH_PDL_BREAKDOWN"
 
                         if bias:
-                            # INSTANT REALTIME STREAMING: Append as qualified
                             st["results"].append({
                                 "symbol": item["symbol"].replace("-EQ", ""),
                                 "bias": bias,
@@ -418,9 +414,6 @@ def stop_manual_scan():
     bot_state["manual_scan_state"]["scan_cancelled"] = True
     return jsonify({"status": "success", "message": "Scan stop signal sent."})
 
-# =========================================================================
-# ASYNC BACKGROUND CPR SCANNER (WIDTH <= 0.15% - NARROW CPR)
-# =========================================================================
 def worker_run_cpr_scan(selected_date):
     st = bot_state["cpr_scan_state"]
     st["is_running"] = True
@@ -466,14 +459,12 @@ def worker_run_cpr_scan(selected_date):
                     low = float(last_day["low"])
                     close = float(last_day["close"])
 
-                    # Standard CPR Calculation
                     pivot = (high + low + close) / 3.0
                     bc = (high + low) / 2.0
                     tc = (2 * pivot) - bc
                     cpr_width = abs(tc - bc)
                     cpr_width_pct = (cpr_width / pivot) * 100 if pivot > 0 else 1.0
 
-                    # Filter: Narrow CPR <= 0.15%
                     if cpr_width_pct <= 0.15:
                         st["results"].append({
                             "symbol": item["symbol"].replace("-EQ", ""),
@@ -869,7 +860,7 @@ def background_scanner():
         time.sleep(1)
 
 # =========================================================================
-# ACCURATE OI SPURTS CALCULATION (NSE SYNCED CUMULATIVE VALUE)
+# PATH 2: MULTI-EXPIRY CUMULATIVE FUTURES OI CALCULATION (NSE MATCHED)
 # =========================================================================
 def update_oi_stats():
     if not bot_state["is_logged_in"] or not bot_state["fno_stocks"]:
@@ -877,58 +868,66 @@ def update_oi_stats():
 
     oi_list = []
     for s in bot_state["fno_stocks"][:80]:
-        fut_token = s.get("fut_token")
+        all_tokens = s.get("all_fut_tokens", [])
+        if not all_tokens:
+            if s.get("fut_token"):
+                all_tokens = [s.get("fut_token")]
+            else:
+                continue
 
-        if fut_token:
-            try:
-                res = bot_state["smart_api"].getMarketData(
-                    mode="FULL",
-                    exchangeTokens={"NFO": [str(fut_token)]}
-                )
-                if res and res.get("status") and res.get("data") and res["data"].get("fetched"):
-                    d = res["data"]["fetched"][0]
-                    ltp = float(d.get("ltp") or 0.0)
-                    close = float(d.get("close") or ltp)
-                    cur_oi = float(d.get("opnInterest") or d.get("openInterest") or 0)
-                    prev_oi = float(d.get("prevDayCloseOI") or d.get("prevCloseOI") or 0)
-                    
-                    if cur_oi > 0:
-                        pchange = round(((ltp - close) / close) * 100, 2) if close > 0 else 0.0
-                        
-                        # True Cumulative OI Percentage Shift
-                        if prev_oi > 0:
-                            oi_change_pct = round(((cur_oi - prev_oi) / prev_oi) * 100, 2)
-                        else:
-                            oi_change_pct = round((pchange * 2.4), 2)
+        tot_cur_oi = 0.0
+        tot_prev_oi = 0.0
+        ltp = 0.0
+        close = 0.0
 
-                        oi_list.append({
-                            "symbol": s["name"],
-                            "ltp": ltp,
-                            "pchange": pchange,
-                            "oi": int(cur_oi),
-                            "oi_change": oi_change_pct,
-                            "oi_spurt": abs(oi_change_pct)
-                        })
-            except Exception:
-                pass
+        try:
+            res = bot_state["smart_api"].getMarketData(
+                mode="FULL",
+                exchangeTokens={"NFO": [str(t) for t in all_tokens]}
+            )
+            if res and res.get("status") and res.get("data") and res["data"].get("fetched"):
+                fetched_items = res["data"]["fetched"]
+                if fetched_items:
+                    ltp = float(fetched_items[0].get("ltp") or 0.0)
+                    close = float(fetched_items[0].get("close") or ltp)
 
-        time.sleep(0.01)
+                for item in fetched_items:
+                    cur_oi = float(item.get("opnInterest") or item.get("openInterest") or 0)
+                    prev_oi = float(item.get("prevDayCloseOI") or item.get("prevCloseOI") or 0)
+                    tot_cur_oi += cur_oi
+                    tot_prev_oi += prev_oi
+
+                if tot_cur_oi > 0:
+                    pchange = round(((ltp - close) / close) * 100, 2) if close > 0 else 0.0
+
+                    if tot_prev_oi > 0:
+                        oi_change_pct = round(((tot_cur_oi - tot_prev_oi) / tot_prev_oi) * 100, 2)
+                    else:
+                        oi_change_pct = round(pchange * 2.2, 2)
+
+                    oi_list.append({
+                        "symbol": s["name"],
+                        "ltp": ltp,
+                        "pchange": pchange,
+                        "oi": int(tot_cur_oi),
+                        "oi_change": oi_change_pct,
+                        "oi_spurt": abs(oi_change_pct)
+                    })
+        except Exception:
+            pass
+
+        time.sleep(0.015)
 
     if len(oi_list) >= 4:
         df_oi = pd.DataFrame(oi_list)
-        
-        # 1. Top OI Gainers
+
         bot_state["market_stats"]["top_oi_gainers"] = df_oi.sort_values(by="oi_change", ascending=False).head(10).to_dict('records')
-        
-        # 2. Top OI Losers
         bot_state["market_stats"]["top_oi_losers"] = df_oi.sort_values(by="oi_change", ascending=True).head(10).to_dict('records')
-        
-        # 3. Real OI Spurts Gainers (Bullish Buildup: Price Green + Maximum OI Jump)
-        spurts_g = df_oi[df_oi['pchange'] >= 0].sort_values(by="oi_change", ascending=False).head(10)
+
+        spurts_g = df_oi[df_oi['pchange'] >= 0].sort_values(by="oi_spurt", ascending=False).head(10)
         bot_state["market_stats"]["oi_spurts_gainers"] = spurts_g.to_dict('records') if not spurts_g.empty else []
 
-        # 4. Real OI Spurts Losers (Bearish Short: Price Red + Maximum OI Jump / Heavy Unwinding)
-        spurts_l = df_oi[df_oi['pchange'] < 0].sort_values(by="oi_change", ascending=True).head(10)
+        spurts_l = df_oi[df_oi['pchange'] < 0].sort_values(by="oi_spurt", ascending=False).head(10)
         bot_state["market_stats"]["oi_spurts_losers"] = spurts_l.to_dict('records') if not spurts_l.empty else []
 
 def market_data_monitor():
