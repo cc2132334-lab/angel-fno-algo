@@ -32,7 +32,6 @@
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
         body { background: var(--bg); color: var(--text-main); padding: 10px; padding-bottom: 70px; overflow-x: hidden; width: 100%; }
         
-        /* CARD OVERFLOW FIX */
         .card { 
             background: var(--card-bg); 
             border-radius: 12px; 
@@ -80,7 +79,6 @@
 
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
 
-        /* DEDICATED RESPONSIVE TABLE WRAPPER */
         .table-responsive {
             width: 100%;
             overflow-x: auto;
@@ -88,13 +86,8 @@
             margin-top: 6px;
             border-radius: 6px;
         }
-        .table-responsive::-webkit-scrollbar {
-            height: 4px;
-        }
-        .table-responsive::-webkit-scrollbar-thumb {
-            background: var(--border);
-            border-radius: 4px;
-        }
+        .table-responsive::-webkit-scrollbar { height: 4px; }
+        .table-responsive::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
         table { width: 100%; border-collapse: collapse; font-size: 0.74rem; }
         th, td { padding: 8px 6px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
@@ -219,7 +212,6 @@
             </div>
         </div>
 
-        <!-- BOT QUALIFIED SETUPS WINDOW (RESPONSIVE FIX) -->
         <div class="card" style="border: 1px solid var(--accent);">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
                 <h2>🎯 Bot Qualified Setups (Live Watch)</h2>
@@ -245,10 +237,10 @@
             </div>
         </div>
 
-        <!-- MANUAL SCANNER (RESPONSIVE FIX) -->
+        <!-- SYNCED REALTIME 5X MANUAL SCANNER (BACKGROUND ASYNC) -->
         <div class="card">
-            <h2>🔍 Manual 5x Volume Scanner (F&O Cash Only)</h2>
-            <p style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 8px;">Date select karke 9:15-9:20 AM C1 candle ka 5x Volume breakout scan karein.</p>
+            <h2>🔍 Manual 5x Volume + PDH/PDL Scanner (Bot Parameters)</h2>
+            <p style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 8px;">Date select karein. Background me run hoga aur qualify hote hi live list update hogi.</p>
             
             <div class="grid-2">
                 <div>
@@ -256,7 +248,7 @@
                     <input type="date" id="scan-date">
                 </div>
                 <div style="display: flex; gap: 6px; align-items: flex-end;">
-                    <button onclick="runManual5xScan()" id="btn-scan" style="background: var(--accent); color: white; flex: 2;">🚀 Scan 5x Volume</button>
+                    <button onclick="startManual5xScan()" id="btn-scan" style="background: var(--accent); color: white; flex: 2;">🚀 Scan 5x Volume</button>
                     <button onclick="stopManualScan()" id="btn-stop-scan" style="background: #dc2626; color: white; flex: 1; display: none;">⏹️ Stop</button>
                 </div>
             </div>
@@ -268,10 +260,10 @@
                         <thead>
                             <tr>
                                 <th>Symbol</th>
+                                <th>Direction</th>
                                 <th>C1 High</th>
                                 <th>C1 Low</th>
-                                <th>C1 Vol</th>
-                                <th>Avg Vol</th>
+                                <th>PDH / PDL</th>
                                 <th>Burst</th>
                             </tr>
                         </thead>
@@ -281,14 +273,49 @@
             </div>
         </div>
 
-        <!-- OPEN INTEREST & OI SPURTS (RESPONSIVE FIX) -->
+        <!-- NEW CPR SCANNER (NARROW CPR <= 0.15%) -->
         <div class="card">
-            <h2>📈 Open Interest & OI Spurts (Watch Only)</h2>
+            <h2>📐 Narrow CPR Scanner (Width &le; 0.15% - F&O Cash)</h2>
+            <p style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 8px;">Next trading session ke liye tight range breakout (Trending) stocks scan karein.</p>
+            
+            <div class="grid-2">
+                <div>
+                    <label style="font-size: 0.70rem; color: var(--text-muted);">Target Trading Date</label>
+                    <input type="date" id="cpr-date">
+                </div>
+                <div style="display: flex; gap: 6px; align-items: flex-end;">
+                    <button onclick="startCPRScan()" id="btn-cpr-scan" style="background: #0284c7; color: white; flex: 2;">🎯 Scan CPR &le; 0.15%</button>
+                    <button onclick="stopCPRScan()" id="btn-stop-cpr" style="background: #dc2626; color: white; flex: 1; display: none;">⏹️ Stop</button>
+                </div>
+            </div>
+
+            <div id="cpr-scan-results" style="margin-top: 12px; display: none;">
+                <div id="cpr-summary" style="font-size: 0.76rem; font-weight: bold; margin-bottom: 6px; color: var(--accent);"></div>
+                <div class="table-responsive" style="max-height: 220px; overflow-y: auto;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>LTP</th>
+                                <th>Pivot</th>
+                                <th>TC / BC</th>
+                                <th>CPR Width %</th>
+                            </tr>
+                        </thead>
+                        <tbody id="cpr-scan-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- OPEN INTEREST & REAL SPURTS (NSE SYNCED) -->
+        <div class="card">
+            <h2>📈 Open Interest & Real OI Spurts (Watch Only)</h2>
             <div class="tabs" id="oi-tabs">
                 <button class="tab-btn active" onclick="switchOITab('gainers', this)">🚀 OI Gainers</button>
                 <button class="tab-btn" onclick="switchOITab('losers', this)">🔻 OI Losers</button>
-                <button class="tab-btn" onclick="switchOITab('spurts_g', this)">⚡ OI Spurts (Bull)</button>
-                <button class="tab-btn" onclick="switchOITab('spurts_l', this)">🔻 OI Spurts (Bear)</button>
+                <button class="tab-btn" onclick="switchOITab('spurts_g', this)">⚡ Real Spurts (Bull)</button>
+                <button class="tab-btn" onclick="switchOITab('spurts_l', this)">🔻 Real Spurts (Bear)</button>
             </div>
             <div class="table-responsive">
                 <table>
@@ -297,7 +324,7 @@
                             <th>Symbol</th>
                             <th>LTP</th>
                             <th>Price Chg %</th>
-                            <th>OI Chg % (Sorted)</th>
+                            <th>OI Chg % (Real)</th>
                             <th>Open Interest</th>
                         </tr>
                     </thead>
@@ -306,7 +333,6 @@
             </div>
         </div>
 
-        <!-- EXECUTION TABS (RESPONSIVE FIX) -->
         <div class="card">
             <div class="tabs" id="execution-tabs">
                 <button class="tab-btn active" onclick="switchTradesTab('active', this)">⚡ Active Positions</button>
@@ -356,8 +382,12 @@
         let isEngineRunning = true;
         let cachedState = null;
         let settingsRestored = false;
+        let scanPoller = null;
+        let cprPoller = null;
 
-        document.getElementById('scan-date').value = new Date().toISOString().split('T')[0];
+        const todayStr = new Date().toISOString().split('T')[0];
+        document.getElementById('scan-date').value = todayStr;
+        document.getElementById('cpr-date').value = todayStr;
 
         function restoreLocalSettings() {
             try {
@@ -415,7 +445,8 @@
             });
         }
 
-        async function runManual5xScan() {
+        // ================= MANUAL 5X SCANNER (LIVE STREAMING & ASYNC) =================
+        async function startManual5xScan() {
             const dateVal = document.getElementById('scan-date').value;
             if(!dateVal) return alert("Please select a date first");
 
@@ -425,65 +456,139 @@
             const summaryElem = document.getElementById('scan-summary');
             const tableBody = document.getElementById('manual-scan-body');
 
-            scanBtn.innerText = "Scanning...";
             scanBtn.disabled = true;
             stopBtn.style.display = 'inline-block';
             resultBox.style.display = 'block';
-            summaryElem.innerText = `Scanning F&O universe for ${dateVal}... please wait`;
-            tableBody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">Fetching 5-minute candles from broker...</td></tr>`;
+            summaryElem.innerText = `Background scan started for ${dateVal}...`;
+            tableBody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">Engine analyzing candles in background...</td></tr>`;
 
+            await fetch('/api/manual-5x-scan', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({date: dateVal})
+            });
+
+            if (scanPoller) clearInterval(scanPoller);
+            scanPoller = setInterval(pollManualScanStatus, 1500);
+        }
+
+        async function pollManualScanStatus() {
             try {
-                const res = await fetch('/api/manual-5x-scan', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({date: dateVal})
-                });
-                const data = await res.json();
+                const res = await fetch('/api/manual-scan-status');
+                const st = await res.json();
                 
-                scanBtn.innerText = "🚀 Scan 5x Volume";
-                scanBtn.disabled = false;
-                stopBtn.style.display = 'none';
+                const scanBtn = document.getElementById('btn-scan');
+                const stopBtn = document.getElementById('btn-stop-scan');
+                const summaryElem = document.getElementById('scan-summary');
+                const tableBody = document.getElementById('manual-scan-body');
 
-                if(data.status === 'success') {
-                    const statusTxt = data.cancelled ? " (Stopped Early)" : "";
-                    summaryElem.innerText = `Date: ${data.date} | Found: ${data.count} stocks${statusTxt}`;
+                if (st.is_running) {
+                    scanBtn.innerText = `Scanning (${st.scanned_count}/${st.total_stocks})...`;
+                    summaryElem.innerText = `Progress: ${st.scanned_count}/${st.total_stocks} stocks scanned | Found: ${st.results.length}`;
+                } else {
+                    scanBtn.innerText = "🚀 Scan 5x Volume";
+                    scanBtn.disabled = false;
+                    stopBtn.style.display = 'none';
+                    clearInterval(scanPoller);
+                    summaryElem.innerText = `Finished! Scanned: ${st.scanned_count} stocks | Found: ${st.results.length} qualified setup(s)`;
+                }
 
-                    if(!data.results || data.results.length === 0) {
-                        tableBody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No stock met >= 5x C1 volume criteria on this date</td></tr>`;
-                        return;
-                    }
-
+                if (st.results && st.results.length > 0) {
                     let html = '';
-                    data.results.forEach(r => {
+                    st.results.forEach(r => {
+                        const isBull = r.bias.includes("BULLISH");
+                        const tag = isBull ? '<span class="tag-buy">BUY (PDH)</span>' : '<span class="tag-sell">SELL (PDL)</span>';
+                        const pdLevel = isBull ? `₹${r.pdh}` : `₹${r.pdl}`;
                         html += `<tr>
                             <td><b>${r.symbol}</b></td>
+                            <td>${tag}</td>
                             <td>₹${r.c1_high}</td>
                             <td>₹${r.c1_low}</td>
-                            <td>${r.c1_volume.toLocaleString()}</td>
-                            <td>${r.avg_volume.toLocaleString()}</td>
-                            <td><span class="highlight-oi">${r.multiplier}x</span></td>
+                            <td><b>${pdLevel}</b></td>
+                            <td><span class="highlight-oi">${r.multiplier}x SMA20</span></td>
                         </tr>`;
                     });
                     tableBody.innerHTML = html;
-                } else {
-                    summaryElem.innerText = "";
-                    tableBody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:red;">${data.message || 'Scan error'}</td></tr>`;
+                } else if (!st.is_running) {
+                    tableBody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No stock met 5x C1 SMA20 + PDH/PDL breakout criteria</td></tr>`;
                 }
-            } catch(err) {
-                scanBtn.innerText = "🚀 Scan 5x Volume";
-                scanBtn.disabled = false;
-                stopBtn.style.display = 'none';
-                tableBody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:red;">Network or Server Timeout. Retry.</td></tr>`;
-            }
+            } catch(e) {}
         }
 
         async function stopManualScan() {
             await fetch('/api/stop-manual-scan', {method: 'POST'});
-            const scanBtn = document.getElementById('btn-scan');
-            const stopBtn = document.getElementById('btn-stop-scan');
-            scanBtn.innerText = "🚀 Scan 5x Volume";
-            scanBtn.disabled = false;
-            stopBtn.style.display = 'none';
+            document.getElementById('btn-stop-scan').style.display = 'none';
+        }
+
+        // ================= CPR SCANNER (LIVE STREAMING & ASYNC) =================
+        async function startCPRScan() {
+            const dateVal = document.getElementById('cpr-date').value;
+            if(!dateVal) return alert("Please select a date first");
+
+            const scanBtn = document.getElementById('btn-cpr-scan');
+            const stopBtn = document.getElementById('btn-stop-cpr');
+            const resultBox = document.getElementById('cpr-scan-results');
+            const summaryElem = document.getElementById('cpr-summary');
+            const tableBody = document.getElementById('cpr-scan-body');
+
+            scanBtn.disabled = true;
+            stopBtn.style.display = 'inline-block';
+            resultBox.style.display = 'block';
+            summaryElem.innerText = `Analyzing Daily Candles for CPR width <= 0.15%...`;
+            tableBody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:var(--text-muted);">Calculating pivots...</td></tr>`;
+
+            await fetch('/api/cpr-scan', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({date: dateVal})
+            });
+
+            if (cprPoller) clearInterval(cprPoller);
+            cprPoller = setInterval(pollCPRStatus, 1500);
+        }
+
+        async function pollCPRStatus() {
+            try {
+                const res = await fetch('/api/cpr-scan-status');
+                const st = await res.json();
+                
+                const scanBtn = document.getElementById('btn-cpr-scan');
+                const stopBtn = document.getElementById('btn-stop-cpr');
+                const summaryElem = document.getElementById('cpr-summary');
+                const tableBody = document.getElementById('cpr-scan-body');
+
+                if (st.is_running) {
+                    scanBtn.innerText = `Calculating (${st.scanned_count}/${st.total_stocks})...`;
+                    summaryElem.innerText = `Progress: ${st.scanned_count}/${st.total_stocks} | Found: ${st.results.length} Narrow CPR`;
+                } else {
+                    scanBtn.innerText = "🎯 Scan CPR &le; 0.15%";
+                    scanBtn.disabled = false;
+                    stopBtn.style.display = 'none';
+                    clearInterval(cprPoller);
+                    summaryElem.innerText = `Scan Complete! Found: ${st.results.length} Narrow CPR (Trending Setup)`;
+                }
+
+                if (st.results && st.results.length > 0) {
+                    let html = '';
+                    st.results.forEach(r => {
+                        html += `<tr>
+                            <td><b>${r.symbol}</b></td>
+                            <td>₹${r.ltp}</td>
+                            <td>₹${r.pivot}</td>
+                            <td>${r.tc} / ${r.bc}</td>
+                            <td><span class="highlight-oi" style="color:#0284c7;">${r.width_pct}%</span></td>
+                        </tr>`;
+                    });
+                    tableBody.innerHTML = html;
+                } else if (!st.is_running) {
+                    tableBody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:var(--text-muted);">No stock found with CPR width <= 0.15%</td></tr>`;
+                }
+            } catch(e) {}
+        }
+
+        async function stopCPRScan() {
+            await fetch('/api/stop-cpr-scan', {method: 'POST'});
+            document.getElementById('btn-stop-cpr').style.display = 'none';
         }
 
         async function login() {
