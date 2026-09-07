@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import sqlite3
+import datetime
 import subprocess
 import requests
 from flask import Flask, request, Response, redirect, render_template, session, jsonify
@@ -26,9 +27,15 @@ def init_db():
             password TEXT,
             port INTEGER,
             status TEXT DEFAULT 'ACTIVE',
+            expiry_date TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    # Column check for existing tables
+    c.execute("PRAGMA table_info(users)")
+    cols = [info[1] for info in c.fetchall()]
+    if "expiry_date" not in cols:
+        c.execute("ALTER TABLE users ADD COLUMN expiry_date TEXT")
     conn.commit()
     conn.close()
 
@@ -44,8 +51,17 @@ def get_next_port():
         return row[0] + 1
     return 5001
 
+def is_expired(expiry_str):
+    if not expiry_str:
+        return False
+    try:
+        exp_dt = datetime.datetime.strptime(expiry_str, "%Y-%m-%d").date()
+        today = datetime.date.today()
+        return today > exp_dt
+    except Exception:
+        return False
+
 def ensure_user_process(username, port):
-    # Agar user process pehle se run nahi ho raha toh server.py ko naye port par start karega
     if username in running_instances:
         proc = running_instances[username]["proc"]
         if proc.poll() is None:
@@ -55,11 +71,9 @@ def ensure_user_process(username, port):
     env["PORT"] = str(port)
     env["CONFIG_FILE"] = f"bot_config_{username}.json"
 
-    # Launch exact existing server.py in background
     proc = subprocess.Popen([sys.executable, "server.py"], env=env)
     running_instances[username] = {"port": port, "proc": proc}
     
-    # Wait till instance starts listening
     for _ in range(25):
         time.sleep(0.3)
         try:
@@ -70,7 +84,7 @@ def ensure_user_process(username, port):
             pass
     return True
 
-# ================= AUTH & ADMIN ROUTES =================
+# ================= AUTH & LOGIN =================
 
 @app.route('/portal-login', methods=['GET', 'POST'])
 def portal_login():
@@ -81,27 +95,43 @@ def portal_login():
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
 
-    # Admin Login Check
     if username == ADMIN_USER and password == ADMIN_PASS:
         session["is_admin"] = True
         return redirect('/admin')
 
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT password, port, status FROM users WHERE username = ?", (username,))
+    c.execute("SELECT id, password, port, status, expiry_date FROM users WHERE username = ?", (username,))
     row = c.fetchone()
-    conn.close()
 
     if not row:
+        conn.close()
         return render_template('login.html', view="login", error="User not registered. Contact admin.")
 
-    db_pass, port, status = row
+    uid, db_pass, port, status, expiry_date = row
+
     if db_pass != password:
+        conn.close()
         return render_template('login.html', view="login", error="Invalid Password.")
 
+    # Expiry Check
+    if is_expired(expiry_date):
+        c.execute("UPDATE users SET status = 'BLOCKED' WHERE id = ?", (uid,))
+        conn.commit()
+        conn.close()
+        if username in running_instances:
+            try:
+                running_instances[username]["proc"].terminate()
+            except Exception:
+                pass
+            running_instances.pop(username, None)
+        return render_template('login.html', view="login", error=f"Subscription Expired on {expiry_date}. Contact admin to renew.")
+
     if status != 'ACTIVE':
+        conn.close()
         return render_template('login.html', view="login", error="Account Blocked. Contact admin.")
 
+    conn.close()
     session["user"] = username
     session["port"] = port
     ensure_user_process(username, port)
@@ -121,21 +151,41 @@ def admin_panel():
 
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT id, username, password, port, status, created_at FROM users ORDER BY id DESC")
+    c.execute("SELECT id, username, password, port, status, expiry_date, created_at FROM users ORDER BY id DESC")
     users = c.fetchall()
     conn.close()
 
     user_list = []
+    today = datetime.date.today()
     for u in users:
         is_live = False
         if u[1] in running_instances and running_instances[u[1]]["proc"].poll() is None:
             is_live = True
+
+        exp_str = u[5] or "Unlimited"
+        days_left = "--"
+        expired = False
+        if u[5]:
+            try:
+                exp_dt = datetime.datetime.strptime(u[5], "%Y-%m-%d").date()
+                diff = (exp_dt - today).days
+                if diff < 0:
+                    days_left = "Expired"
+                    expired = True
+                else:
+                    days_left = f"{diff} days left"
+            except Exception:
+                pass
+
         user_list.append({
             "id": u[0], "username": u[1], "password": u[2], "port": u[3],
-            "status": u[4], "created_at": u[5], "is_live": is_live
+            "status": u[4], "expiry_date": exp_str, "days_left": days_left,
+            "expired": expired, "created_at": u[6], "is_live": is_live
         })
 
-    return render_template('login.html', view="admin", users=user_list)
+    # Default date in add-user form: 30 days from today
+    default_exp = (datetime.date.today() + datetime.timedelta(days=30)).strftime("%Y-%m-%d")
+    return render_template('login.html', view="admin", users=user_list, default_exp=default_exp)
 
 @app.route('/admin/add-user', methods=['POST'])
 def admin_add_user():
@@ -144,6 +194,7 @@ def admin_add_user():
 
     username = request.form.get("username", "").strip()
     password = request.form.get("password", "").strip()
+    expiry_date = request.form.get("expiry_date", "").strip()
 
     if not username or not password:
         return redirect('/admin')
@@ -152,12 +203,26 @@ def admin_add_user():
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-        c.execute("INSERT INTO users (username, password, port, status) VALUES (?, ?, ?, 'ACTIVE')", (username, password, port))
+        c.execute("INSERT INTO users (username, password, port, status, expiry_date) VALUES (?, ?, ?, 'ACTIVE', ?)", 
+                  (username, password, port, expiry_date or None))
         conn.commit()
         conn.close()
     except Exception:
         pass
 
+    return redirect('/admin')
+
+@app.route('/admin/update-expiry/<int:user_id>', methods=['POST'])
+def admin_update_expiry(user_id):
+    if not session.get("is_admin"):
+        return jsonify({"status": "error", "message": "Unauthorized"}), 403
+
+    new_expiry = request.form.get("new_expiry", "").strip()
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("UPDATE users SET expiry_date = ?, status = 'ACTIVE' WHERE id = ?", (new_expiry or None, user_id))
+    conn.commit()
+    conn.close()
     return redirect('/admin')
 
 @app.route('/admin/toggle-status/<int:user_id>')
@@ -175,7 +240,6 @@ def admin_toggle_status(user_id):
         c.execute("UPDATE users SET status = ? WHERE id = ?", (new_status, user_id))
         conn.commit()
 
-        # Agar block kiya toh background running process kill karega
         if new_status == 'BLOCKED' and uname in running_instances:
             try:
                 running_instances[uname]["proc"].terminate()
@@ -186,12 +250,11 @@ def admin_toggle_status(user_id):
     conn.close()
     return redirect('/admin')
 
-# ================= REVERSE PROXY ROUTER =================
+# ================= MASTER PROXY ROUTER =================
 
 @app.route('/', defaults={'path': ''}, methods=['GET', 'POST', 'PUT', 'DELETE'])
 @app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE'])
 def master_proxy_handler(path):
-    # Admin & Portal routes bypass
     if path.startswith('portal-') or path.startswith('admin'):
         return Response("Not found", status=404)
 
@@ -201,20 +264,40 @@ def master_proxy_handler(path):
     if not user or not port:
         return redirect('/portal-login')
 
-    # Status re-verify
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT status FROM users WHERE username = ?", (user,))
+    c.execute("SELECT id, status, expiry_date FROM users WHERE username = ?", (user,))
     row = c.fetchone()
-    conn.close()
 
-    if not row or row[0] != 'ACTIVE':
+    if not row:
+        conn.close()
         session.clear()
         return redirect('/portal-login')
 
+    uid, status, expiry_date = row
+    
+    # Active runtime expiry validation
+    if is_expired(expiry_date):
+        c.execute("UPDATE users SET status = 'BLOCKED' WHERE id = ?", (uid,))
+        conn.commit()
+        conn.close()
+        if user in running_instances:
+            try:
+                running_instances[user]["proc"].terminate()
+            except Exception:
+                pass
+            running_instances.pop(user, None)
+        session.clear()
+        return redirect('/portal-login')
+
+    if status != 'ACTIVE':
+        conn.close()
+        session.clear()
+        return redirect('/portal-login')
+
+    conn.close()
     ensure_user_process(user, port)
 
-    # Forward exact request to User's private Bot instance
     target_url = f"http://127.0.0.1:{port}/{path}"
     headers = {k: v for k, v in request.headers if k.lower() != 'host'}
 
@@ -231,8 +314,8 @@ def master_proxy_handler(path):
         excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
         resp_headers = [(k, v) for k, v in resp.raw.headers.items() if k.lower() not in excluded_headers]
         return Response(resp.content, resp.status_code, resp_headers)
-    except Exception as e:
-        return f"<h3>Private bot initializing for {user}... Please refresh in 5 seconds.</h3>", 503
+    except Exception:
+        return f"<h3>Initializing terminal for {user}... Please refresh in 5 seconds.</h3>", 503
 
 if __name__ == '__main__':
     main_port = int(os.environ.get("PORT", 5000))
