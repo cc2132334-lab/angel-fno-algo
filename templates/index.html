@@ -30,17 +30,29 @@
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        body { background: var(--bg); color: var(--text-main); padding: 12px; padding-bottom: 70px; }
-        .card { background: var(--card-bg); border-radius: 12px; padding: 14px; margin-bottom: 12px; border: 1px solid var(--border); }
-        h2 { font-size: 0.92rem; color: var(--accent); margin-bottom: 8px; text-transform: uppercase; }
-        input, select, button { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text-main); margin-top: 6px; font-size: 0.9rem; }
+        body { background: var(--bg); color: var(--text-main); padding: 10px; padding-bottom: 70px; overflow-x: hidden; width: 100%; }
+        
+        /* CARD OVERFLOW FIX */
+        .card { 
+            background: var(--card-bg); 
+            border-radius: 12px; 
+            padding: 12px; 
+            margin-bottom: 12px; 
+            border: 1px solid var(--border); 
+            width: 100%;
+            max-width: 100%;
+            overflow: hidden; 
+        }
+        
+        h2 { font-size: 0.90rem; color: var(--accent); margin-bottom: 8px; text-transform: uppercase; }
+        input, select, button { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text-main); margin-top: 6px; font-size: 0.88rem; }
         button { font-weight: bold; border: none; cursor: pointer; }
         
         .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
         .theme-btn { background: var(--card-bg); border: 1px solid var(--border); padding: 5px 10px; border-radius: 20px; font-size: 0.75rem; cursor: pointer; width: auto; margin: 0; }
 
         .clock-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
-        .clock-time { font-size: 0.82rem; font-weight: 700; font-family: monospace; }
+        .clock-time { font-size: 0.80rem; font-weight: 700; font-family: monospace; }
         .mkt-status { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; font-weight: 800; }
         .status-dot { width: 9px; height: 9px; border-radius: 50%; }
         .dot-green { background: #22c55e; box-shadow: 0 0 8px #22c55e; animation: pulse 1.5s infinite; }
@@ -55,20 +67,38 @@
         .ticker-bar { display: flex; gap: 8px; margin-bottom: 12px; }
         .ticker-box { flex: 1; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; text-align: center; }
         .ticker-name { font-size: 0.72rem; color: var(--text-muted); }
-        .ticker-val { font-size: 1.15rem; font-weight: bold; margin-top: 2px; }
-        .ticker-chg { font-size: 0.78rem; font-weight: bold; margin-top: 2px; }
+        .ticker-val { font-size: 1.10rem; font-weight: bold; margin-top: 2px; }
+        .ticker-chg { font-size: 0.76rem; font-weight: bold; margin-top: 2px; }
 
-        .status-box { background: rgba(56, 189, 248, 0.08); color: var(--accent); padding: 10px; border-radius: 8px; font-size: 0.8rem; font-family: monospace; border: 1px dashed var(--accent); margin-bottom: 12px; }
+        .status-box { background: rgba(56, 189, 248, 0.08); color: var(--accent); padding: 10px; border-radius: 8px; font-size: 0.78rem; font-family: monospace; border: 1px dashed var(--accent); margin-bottom: 12px; word-break: break-all; }
 
-        .tabs { display: flex; gap: 6px; margin-bottom: 10px; overflow-x: auto; }
-        .tab-btn { flex: 1; padding: 8px; font-size: 0.72rem; background: var(--card-bg); border: 1px solid var(--border); color: var(--text-muted); border-radius: 6px; white-space: nowrap; margin-top: 0; }
+        .tabs { display: flex; gap: 5px; margin-bottom: 10px; overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 4px; }
+        .tabs::-webkit-scrollbar { height: 4px; }
+        .tabs::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+        .tab-btn { flex: 1; padding: 7px 10px; font-size: 0.70rem; background: var(--card-bg); border: 1px solid var(--border); color: var(--text-muted); border-radius: 6px; white-space: nowrap; margin-top: 0; }
         .tab-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
 
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
 
-        table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 6px; }
-        th, td { padding: 8px 4px; text-align: left; border-bottom: 1px solid var(--border); }
-        th { color: var(--text-muted); }
+        /* DEDICATED RESPONSIVE TABLE WRAPPER */
+        .table-responsive {
+            width: 100%;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            margin-top: 6px;
+            border-radius: 6px;
+        }
+        .table-responsive::-webkit-scrollbar {
+            height: 4px;
+        }
+        .table-responsive::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 4px;
+        }
+
+        table { width: 100%; border-collapse: collapse; font-size: 0.74rem; }
+        th, td { padding: 8px 6px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+        th { color: var(--text-muted); font-weight: 600; }
         tr:hover { background: var(--table-hover); }
 
         .up-text { color: var(--up); }
@@ -80,7 +110,7 @@
         .highlight-oi { background: rgba(147, 51, 234, 0.15); color: #9333ea; padding: 2px 6px; border-radius: 4px; font-weight: bold; }
         [data-theme="dark"] .highlight-oi { color: #c084fc; }
 
-        .log-box { background: rgba(15, 23, 42, 0.04); border: 1px solid var(--border); border-radius: 8px; padding: 10px; max-height: 250px; overflow-y: auto; font-family: monospace; font-size: 0.75rem; line-height: 1.5; }
+        .log-box { background: rgba(15, 23, 42, 0.04); border: 1px solid var(--border); border-radius: 8px; padding: 10px; max-height: 250px; overflow-y: auto; font-family: monospace; font-size: 0.72rem; line-height: 1.5; }
         [data-theme="dark"] .log-box { background: rgba(0, 0, 0, 0.3); }
         .log-entry { margin-bottom: 4px; border-bottom: 1px dashed rgba(148, 163, 184, 0.15); padding-bottom: 2px; }
     </style>
@@ -88,7 +118,7 @@
 <body data-theme="light">
 
     <div class="header-bar">
-        <h1 style="font-size: 1.05rem; font-weight: 800;">⚡ ALGO PRO TERMINAL</h1>
+        <h1 style="font-size: 1.00rem; font-weight: 800;">⚡ ALGO PRO TERMINAL</h1>
         <button class="theme-btn" onclick="toggleTheme()" id="theme-btn">🌙 Dark Mode</button>
     </div>
 
@@ -100,9 +130,9 @@
         <div class="clock-time" id="live-clock">--:--:-- --</div>
     </div>
 
-    <div class="card" id="login-card" style="border: 2px solid var(--accent); padding: 18px;">
-        <h2 style="font-size: 1.05rem; margin-bottom: 8px; text-align: center;">🔐 Connect Angel One Broker</h2>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px; text-align: center;">Terminal access karne ke liye broker connect karein.</p>
+    <div class="card" id="login-card" style="border: 2px solid var(--accent); padding: 16px;">
+        <h2 style="font-size: 1.00rem; margin-bottom: 8px; text-align: center;">🔐 Connect Angel One Broker</h2>
+        <p style="font-size: 0.76rem; color: var(--text-muted); margin-bottom: 12px; text-align: center;">Terminal access karne ke liye broker connect karein.</p>
         <input type="text" id="api_key" placeholder="SmartAPI Key">
         <input type="text" id="client_code" placeholder="Client ID">
         <input type="password" id="pin" placeholder="MPIN">
@@ -130,10 +160,10 @@
         <div class="card" style="border-left: 4px solid #f59e0b;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                 <div>
-                    <span style="font-size: 0.72rem; color: var(--text-muted);">REALIZED TODAY'S P&L</span>
-                    <div id="pnl-display" style="font-size: 1.3rem; font-weight: bold; color: var(--text-muted);">₹0.00</div>
+                    <span style="font-size: 0.70rem; color: var(--text-muted);">REALIZED TODAY'S P&L</span>
+                    <div id="pnl-display" style="font-size: 1.25rem; font-weight: bold; color: var(--text-muted);">₹0.00</div>
                 </div>
-                <div id="mode-badge" style="font-size: 0.75rem; font-weight: bold; color: var(--accent);">SIMULATION MODE</div>
+                <div id="mode-badge" style="font-size: 0.72rem; font-weight: bold; color: var(--accent);">SIMULATION MODE</div>
             </div>
             <div style="display: flex; gap: 8px; margin-bottom: 10px;">
                 <button id="btn-paper" onclick="switchMode('PAPER')" style="flex: 1; background: #0284c7; color: white;">📝 Paper Mode</button>
@@ -147,7 +177,7 @@
             
             <div class="grid-2">
                 <div>
-                    <label style="font-size: 0.75rem; color: var(--text-muted);">Max Trades Per Day</label>
+                    <label style="font-size: 0.72rem; color: var(--text-muted);">Max Trades Per Day</label>
                     <select id="max-trades" onchange="syncSettings()">
                         <option value="1">1 Trade</option>
                         <option value="2">2 Trades</option>
@@ -157,7 +187,7 @@
                     </select>
                 </div>
                 <div>
-                    <label style="font-size: 0.75rem; color: var(--text-muted);">Cutoff Time Window</label>
+                    <label style="font-size: 0.72rem; color: var(--text-muted);">Cutoff Time Window</label>
                     <select id="cutoff-time" onchange="syncSettings()">
                         <option value="10:00">Till 10:00 AM</option>
                         <option value="10:30">Till 10:30 AM</option>
@@ -174,7 +204,7 @@
 
             <div style="margin-top: 10px;">
                 <div style="display: flex; justify-content: space-between;">
-                    <label style="font-size: 0.75rem; color: var(--text-muted);">Target Book Ratio (Trail from 1:2):</label>
+                    <label style="font-size: 0.72rem; color: var(--text-muted);">Target Book Ratio (Trail from 1:2):</label>
                     <span id="rr-label" style="font-weight: bold; color: var(--accent);">1:3</span>
                 </div>
                 <input type="range" id="rr-slider" min="1" max="10" step="1" value="3" oninput="updateRR(this.value)" onchange="syncSettings()">
@@ -182,44 +212,47 @@
 
             <div style="margin-top: 10px;">
                 <div style="display: flex; justify-content: space-between;">
-                    <label style="font-size: 0.75rem; color: var(--text-muted);">Risk Per Signal:</label>
+                    <label style="font-size: 0.72rem; color: var(--text-muted);">Risk Per Signal:</label>
                     <span id="risk-label" style="font-weight: bold; color: var(--up);">₹500</span>
                 </div>
                 <input type="range" id="risk-slider" min="50" max="5000" step="50" value="500" oninput="updateRisk(this.value)" onchange="syncSettings()">
             </div>
         </div>
 
-        <!-- NEW: BOT QUALIFIED SETUPS WINDOW -->
+        <!-- BOT QUALIFIED SETUPS WINDOW (RESPONSIVE FIX) -->
         <div class="card" style="border: 1px solid var(--accent);">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
                 <h2>🎯 Bot Qualified Setups (Live Watch)</h2>
                 <span id="qualified-count" style="font-size: 0.75rem; font-weight: bold; color: var(--accent);">0 Setups</span>
             </div>
-            <p style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 6px;">09:20 AM C1 Volume SMA20 5x + Strict PDH/PDL filter pass karne wale verified stocks:</p>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Symbol</th>
-                        <th>Bias Direction</th>
-                        <th>C1 Range</th>
-                        <th>PDH / PDL</th>
-                        <th>Volume Burst</th>
-                        <th>State</th>
-                    </tr>
-                </thead>
-                <tbody id="qualified-body">
-                    <tr><td colspan="6" style="text-align:center; color: var(--text-muted);">Waiting for 09:20 AM setup qualification...</td></tr>
-                </tbody>
-            </table>
+            <p style="font-size: 0.70rem; color: var(--text-muted); margin-bottom: 6px;">09:20 AM C1 Volume SMA20 5x + Strict PDH/PDL filter pass karne wale verified stocks:</p>
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th>Bias Direction</th>
+                            <th>C1 Range</th>
+                            <th>PDH / PDL</th>
+                            <th>Volume Burst</th>
+                            <th>State</th>
+                        </tr>
+                    </thead>
+                    <tbody id="qualified-body">
+                        <tr><td colspan="6" style="text-align:center; color: var(--text-muted);">Waiting for 09:20 AM setup qualification...</td></tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
 
+        <!-- MANUAL SCANNER (RESPONSIVE FIX) -->
         <div class="card">
             <h2>🔍 Manual 5x Volume Scanner (F&O Cash Only)</h2>
-            <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 8px;">Date select karke 9:15-9:20 AM C1 candle ka 5x Volume breakout scan karein.</p>
+            <p style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 8px;">Date select karke 9:15-9:20 AM C1 candle ka 5x Volume breakout scan karein.</p>
             
             <div class="grid-2">
                 <div>
-                    <label style="font-size: 0.72rem; color: var(--text-muted);">Select Date for Analysis</label>
+                    <label style="font-size: 0.70rem; color: var(--text-muted);">Select Date for Analysis</label>
                     <input type="date" id="scan-date">
                 </div>
                 <div style="display: flex; gap: 6px; align-items: flex-end;">
@@ -229,8 +262,8 @@
             </div>
             
             <div id="manual-scan-results" style="margin-top: 12px; display: none;">
-                <div id="scan-summary" style="font-size: 0.78rem; font-weight: bold; margin-bottom: 6px; color: var(--accent);"></div>
-                <div style="max-height: 220px; overflow-y: auto;">
+                <div id="scan-summary" style="font-size: 0.76rem; font-weight: bold; margin-bottom: 6px; color: var(--accent);"></div>
+                <div class="table-responsive" style="max-height: 220px; overflow-y: auto;">
                     <table>
                         <thead>
                             <tr>
@@ -248,7 +281,7 @@
             </div>
         </div>
 
-        <!-- ENHANCED: 4-TAB SORTED OPEN INTEREST & OI SPURTS WATCH -->
+        <!-- OPEN INTEREST & OI SPURTS (RESPONSIVE FIX) -->
         <div class="card">
             <h2>📈 Open Interest & OI Spurts (Watch Only)</h2>
             <div class="tabs" id="oi-tabs">
@@ -257,20 +290,23 @@
                 <button class="tab-btn" onclick="switchOITab('spurts_g', this)">⚡ OI Spurts (Bull)</button>
                 <button class="tab-btn" onclick="switchOITab('spurts_l', this)">🔻 OI Spurts (Bear)</button>
             </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Symbol</th>
-                        <th>LTP</th>
-                        <th>Price Chg %</th>
-                        <th>OI Chg % (Sorted)</th>
-                        <th>Open Interest</th>
-                    </tr>
-                </thead>
-                <tbody id="oi-body"><tr><td colspan="5" style="text-align:center; color: var(--text-muted);">Loading live Open Interest data...</td></tr></tbody>
-            </table>
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th>LTP</th>
+                            <th>Price Chg %</th>
+                            <th>OI Chg % (Sorted)</th>
+                            <th>Open Interest</th>
+                        </tr>
+                    </thead>
+                    <tbody id="oi-body"><tr><td colspan="5" style="text-align:center; color: var(--text-muted);">Loading live Open Interest data...</td></tr></tbody>
+                </table>
+            </div>
         </div>
 
+        <!-- EXECUTION TABS (RESPONSIVE FIX) -->
         <div class="card">
             <div class="tabs" id="execution-tabs">
                 <button class="tab-btn active" onclick="switchTradesTab('active', this)">⚡ Active Positions</button>
@@ -280,24 +316,30 @@
             </div>
 
             <div id="active-view">
-                <table>
-                    <thead><tr><th>Symbol</th><th>Side</th><th>Entry</th><th>SL</th><th>Qty</th><th>P&L</th><th>Status</th></tr></thead>
-                    <tbody id="active-body"><tr><td colspan="7" style="text-align:center; color: var(--text-muted);">No open positions</td></tr></tbody>
-                </table>
+                <div class="table-responsive">
+                    <table>
+                        <thead><tr><th>Symbol</th><th>Side</th><th>Entry</th><th>SL</th><th>Qty</th><th>P&L</th><th>Status</th></tr></thead>
+                        <tbody id="active-body"><tr><td colspan="7" style="text-align:center; color: var(--text-muted);">No open positions</td></tr></tbody>
+                    </table>
+                </div>
             </div>
 
             <div id="pending-view" style="display: none;">
-                <table>
-                    <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Trigger</th><th>Inval Level</th><th>Qty</th><th>Status</th></tr></thead>
-                    <tbody id="pending-body"><tr><td colspan="7" style="text-align:center; color: var(--text-muted);">No pending orders</td></tr></tbody>
-                </table>
+                <div class="table-responsive">
+                    <table>
+                        <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Trigger</th><th>Inval Level</th><th>Qty</th><th>Status</th></tr></thead>
+                        <tbody id="pending-body"><tr><td colspan="7" style="text-align:center; color: var(--text-muted);">No pending orders</td></tr></tbody>
+                    </table>
+                </div>
             </div>
 
             <div id="history-view" style="display: none;">
-                <table>
-                    <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Entry → Exit</th><th>P&L</th><th>Result</th></tr></thead>
-                    <tbody id="history-body"><tr><td colspan="6" style="text-align:center; color: var(--text-muted);">No closed trades yet</td></tr></tbody>
-                </table>
+                <div class="table-responsive">
+                    <table>
+                        <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Entry → Exit</th><th>P&L</th><th>Result</th></tr></thead>
+                        <tbody id="history-body"><tr><td colspan="6" style="text-align:center; color: var(--text-muted);">No closed trades yet</td></tr></tbody>
+                    </table>
+                </div>
             </div>
 
             <div id="logs-view" style="display: none;">
