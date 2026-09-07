@@ -78,11 +78,9 @@ def is_session_valid_today():
     now_ist = get_ist_now()
     today_str = now_ist.strftime("%Y-%m-%d")
 
-    # Pichle din ka login expire
     if login_date != today_str:
         return False
 
-    # Raat 11:59 PM (23:59 IST) par auto logout
     midnight_cutoff = datetime.time(23, 59)
     if now_ist.time() >= midnight_cutoff:
         return False
@@ -170,6 +168,13 @@ def portal_logout():
         stop_user_instance(user)
     session.clear()
     return redirect('/portal-login')
+
+@app.route('/api/user-info')
+def api_user_info():
+    user = session.get("user", "")
+    if not user:
+        return jsonify({"username": "Guest", "status": "LOGGED_OUT"})
+    return jsonify({"username": user, "status": "ACTIVE"})
 
 # ================= ADMIN BACKOFFICE =================
 
@@ -305,7 +310,7 @@ def admin_delete_user(user_id):
 @app.route('/', defaults={'path': ''}, methods=['GET', 'POST', 'PUT', 'DELETE'])
 @app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE'])
 def master_proxy_handler(path):
-    if path.startswith('portal-') or path.startswith('admin'):
+    if path.startswith('portal-') or path.startswith('admin') or path.startswith('api/user-info'):
         return Response("Not found", status=404)
 
     user = session.get("user")
@@ -314,7 +319,6 @@ def master_proxy_handler(path):
     if not user or not port:
         return redirect('/portal-login')
 
-    # Midnight 11:59 PM Auto-Logout Check
     if not is_session_valid_today():
         stop_user_instance(user)
         session.clear()
