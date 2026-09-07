@@ -1,7 +1,13 @@
+# =====================================================================
+# PROJECT: ALGO TERMINAL PRO - MULTI-USER EDITION
+# FILE: proxy_gateway.py
+# VERSION: v2.1-CLOUD-DB
+# MODULE: Master Proxy Gateway with PostgreSQL Cloud DB & SQLite Fallback
+# =====================================================================
+
 import os
 import sys
 import time
-import sqlite3
 import datetime
 from dateutil import tz
 import subprocess
@@ -13,40 +19,66 @@ app.secret_key = os.environ.get("GATEWAY_SECRET", "super_secure_master_key_9988"
 
 ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
 ADMIN_PASS = os.environ.get("ADMIN_PASS", "admin@123")
-DB_FILE = "users.db"
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 IST = tz.gettz('Asia/Kolkata')
-
 running_instances = {}
+
+# PostgreSQL vs SQLite Connection Manager
+USE_POSTGRES = bool(DATABASE_URL)
+if USE_POSTGRES:
+    import psycopg2
+    from urllib.parse import urlparse
+else:
+    import sqlite3
 
 def get_ist_now():
     return datetime.datetime.now(IST)
 
+def get_db_connection():
+    if USE_POSTGRES:
+        # Render internal PostgreSQL connection
+        db_url = DATABASE_URL
+        if db_url.startswith("postgres://"):
+            db_url = db_url.replace("postgres://", "postgresql://", 1)
+        return psycopg2.connect(db_url)
+    else:
+        return sqlite3.connect("users.db")
+
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE,
-            password TEXT,
-            port INTEGER,
-            status TEXT DEFAULT 'ACTIVE',
-            expiry_date TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    c.execute("PRAGMA table_info(users)")
-    cols = [info[1] for info in c.fetchall()]
-    if "expiry_date" not in cols:
-        c.execute("ALTER TABLE users ADD COLUMN expiry_date TEXT")
+    if USE_POSTGRES:
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(100) UNIQUE,
+                password VARCHAR(100),
+                port INTEGER,
+                status VARCHAR(50) DEFAULT 'ACTIVE',
+                expiry_date VARCHAR(50),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+    else:
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE,
+                password TEXT,
+                port INTEGER,
+                status TEXT DEFAULT 'ACTIVE',
+                expiry_date TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
     conn.commit()
     conn.close()
 
 init_db()
 
 def get_next_port():
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
     c.execute("SELECT MAX(port) FROM users")
     row = c.fetchone()
@@ -125,9 +157,10 @@ def portal_login():
         session["is_admin"] = True
         return redirect('/admin')
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("SELECT id, password, port, status, expiry_date FROM users WHERE username = ?", (username,))
+    query = "SELECT id, password, port, status, expiry_date FROM users WHERE username = %s" if USE_POSTGRES else "SELECT id, password, port, status, expiry_date FROM users WHERE username = ?"
+    c.execute(query, (username,))
     row = c.fetchone()
 
     if not row:
@@ -141,7 +174,8 @@ def portal_login():
         return render_template('login.html', view="login", error="Invalid Password.")
 
     if is_expired(expiry_date):
-        c.execute("UPDATE users SET status = 'BLOCKED' WHERE id = ?", (uid,))
+        up_query = "UPDATE users SET status = 'BLOCKED' WHERE id = %s" if USE_POSTGRES else "UPDATE users SET status = 'BLOCKED' WHERE id = ?"
+        c.execute(up_query, (uid,))
         conn.commit()
         conn.close()
         stop_user_instance(username)
@@ -183,7 +217,7 @@ def admin_panel():
     if not session.get("is_admin"):
         return redirect('/portal-login')
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
     c.execute("SELECT id, username, password, port, status, expiry_date, created_at FROM users ORDER BY id DESC")
     users = c.fetchall()
@@ -234,10 +268,10 @@ def admin_add_user():
 
     port = get_next_port()
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db_connection()
         c = conn.cursor()
-        c.execute("INSERT INTO users (username, password, port, status, expiry_date) VALUES (?, ?, ?, 'ACTIVE', ?)", 
-                  (username, password, port, expiry_date or None))
+        query = "INSERT INTO users (username, password, port, status, expiry_date) VALUES (%s, %s, %s, 'ACTIVE', %s)" if USE_POSTGRES else "INSERT INTO users (username, password, port, status, expiry_date) VALUES (?, ?, ?, 'ACTIVE', ?)"
+        c.execute(query, (username, password, port, expiry_date or None))
         conn.commit()
         conn.close()
     except Exception:
@@ -251,9 +285,10 @@ def admin_update_expiry(user_id):
         return jsonify({"status": "error", "message": "Unauthorized"}), 403
 
     new_expiry = request.form.get("new_expiry", "").strip()
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("UPDATE users SET expiry_date = ?, status = 'ACTIVE' WHERE id = ?", (new_expiry or None, user_id))
+    query = "UPDATE users SET expiry_date = %s, status = 'ACTIVE' WHERE id = %s" if USE_POSTGRES else "UPDATE users SET expiry_date = ?, status = 'ACTIVE' WHERE id = ?"
+    c.execute(query, (new_expiry or None, user_id))
     conn.commit()
     conn.close()
     return redirect('/admin')
@@ -263,14 +298,16 @@ def admin_toggle_status(user_id):
     if not session.get("is_admin"):
         return jsonify({"status": "error", "message": "Unauthorized"}), 403
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("SELECT username, status FROM users WHERE id = ?", (user_id,))
+    q1 = "SELECT username, status FROM users WHERE id = %s" if USE_POSTGRES else "SELECT username, status FROM users WHERE id = ?"
+    c.execute(q1, (user_id,))
     row = c.fetchone()
     if row:
         uname, cur_status = row
         new_status = 'BLOCKED' if cur_status == 'ACTIVE' else 'ACTIVE'
-        c.execute("UPDATE users SET status = ? WHERE id = ?", (new_status, user_id))
+        q2 = "UPDATE users SET status = %s WHERE id = %s" if USE_POSTGRES else "UPDATE users SET status = ? WHERE id = ?"
+        c.execute(q2, (new_status, user_id))
         conn.commit()
 
         if new_status == 'BLOCKED':
@@ -284,13 +321,15 @@ def admin_delete_user(user_id):
     if not session.get("is_admin"):
         return jsonify({"status": "error", "message": "Unauthorized"}), 403
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("SELECT username FROM users WHERE id = ?", (user_id,))
+    q1 = "SELECT username FROM users WHERE id = %s" if USE_POSTGRES else "SELECT username FROM users WHERE id = ?"
+    c.execute(q1, (user_id,))
     row = c.fetchone()
     if row:
         uname = row[0]
-        c.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        q2 = "DELETE FROM users WHERE id = %s" if USE_POSTGRES else "DELETE FROM users WHERE id = ?"
+        c.execute(q2, (user_id,))
         conn.commit()
 
         stop_user_instance(uname)
@@ -324,9 +363,10 @@ def master_proxy_handler(path):
         session.clear()
         return redirect('/portal-login')
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("SELECT id, status, expiry_date FROM users WHERE username = ?", (user,))
+    query = "SELECT id, status, expiry_date FROM users WHERE username = %s" if USE_POSTGRES else "SELECT id, status, expiry_date FROM users WHERE username = ?"
+    c.execute(query, (user,))
     row = c.fetchone()
 
     if not row:
@@ -337,7 +377,8 @@ def master_proxy_handler(path):
     uid, status, expiry_date = row
     
     if is_expired(expiry_date):
-        c.execute("UPDATE users SET status = 'BLOCKED' WHERE id = ?", (uid,))
+        up_query = "UPDATE users SET status = 'BLOCKED' WHERE id = %s" if USE_POSTGRES else "UPDATE users SET status = 'BLOCKED' WHERE id = ?"
+        c.execute(up_query, (uid,))
         conn.commit()
         conn.close()
         stop_user_instance(user)
