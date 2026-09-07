@@ -2,89 +2,104 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>🔐 Angel One Algo Login</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ 'Admin Backoffice' if view == 'admin' else 'Terminal Portal Login' }}</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        body { background: #f8fafc; color: #0f172a; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 16px; }
-        .login-card { background: #ffffff; border: 2px solid #0284c7; border-radius: 12px; padding: 24px; width: 100%; max-width: 420px; box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
-        h1 { font-size: 1.25rem; font-weight: 800; color: #0284c7; text-align: center; margin-bottom: 6px; }
-        p { font-size: 0.8rem; color: #64748b; text-align: center; margin-bottom: 20px; }
-        label { font-size: 0.75rem; font-weight: 600; color: #64748b; margin-top: 10px; display: block; }
-        input { width: 100%; padding: 11px; border-radius: 8px; border: 1px solid #e2e8f0; margin-top: 4px; font-size: 0.9rem; }
-        input:focus { border-color: #0284c7; outline: none; }
-        button { width: 100%; padding: 12px; border-radius: 8px; border: none; background: #0284c7; color: white; font-weight: bold; font-size: 0.95rem; margin-top: 18px; cursor: pointer; }
-        button:disabled { opacity: 0.6; cursor: not-allowed; }
-        .error-msg { color: #dc2626; font-size: 0.8rem; font-weight: 600; text-align: center; margin-top: 10px; display: none; }
+        body { background: #0a0f1d; color: #f1f5f9; padding: 15px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .box { background: #131d31; border: 1px solid #1e2e4a; border-radius: 12px; padding: 22px; width: 100%; max-width: 420px; }
+        .box-admin { max-width: 850px; }
+        h1 { font-size: 1.15rem; color: #38bdf8; margin-bottom: 12px; text-align: center; }
+        input, button { width: 100%; padding: 11px; border-radius: 8px; border: 1px solid #1e2e4a; background: #0a0f1d; color: #f1f5f9; margin-top: 8px; font-size: 0.9rem; }
+        button { background: #0284c7; font-weight: bold; border: none; cursor: pointer; margin-top: 14px; }
+        .error { background: rgba(239, 68, 68, 0.15); color: #ef4444; padding: 9px; border-radius: 6px; font-size: 0.8rem; margin-bottom: 10px; text-align: center; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 15px; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #1e2e4a; }
+        th { color: #94a3b8; }
+        .tag-active { color: #22c55e; background: rgba(34, 197, 94, 0.15); padding: 3px 8px; border-radius: 4px; font-weight: bold; text-decoration: none; }
+        .tag-blocked { color: #ef4444; background: rgba(239, 68, 68, 0.15); padding: 3px 8px; border-radius: 4px; font-weight: bold; text-decoration: none; }
+        .badge-live { color: #38bdf8; font-weight: bold; font-size: 0.72rem; }
     </style>
 </head>
 <body>
 
-    <div class="login-card">
-        <h1>⚡ ALGO TERMINAL PRO</h1>
-        <p>Login with your Angel One SmartAPI credentials</p>
-
-        <label>SmartAPI Key</label>
-        <input type="text" id="api_key" placeholder="Enter API Key" required>
-
-        <label>Client Code / ID</label>
-        <input type="text" id="client_code" placeholder="e.g. AB1234" required>
-
-        <label>4-Digit MPIN</label>
-        <input type="password" id="pin" placeholder="Enter MPIN" required>
-
-        <label>TOTP Secret Key</label>
-        <input type="password" id="totp_secret" placeholder="Enter TOTP Secret" required>
-
-        <button id="login-btn" onclick="submitLogin()">Connect Broker & Launch Terminal</button>
-        <div class="error-msg" id="err-box"></div>
+{% if view == 'login' %}
+    <div class="box">
+        <h1>🔐 ALGO PRO PORTAL LOGIN</h1>
+        <p style="font-size: 0.76rem; color: #94a3b8; text-align: center; margin-bottom: 15px;">Enter your portal credentials to unlock trading terminal</p>
+        {% if error %}
+            <div class="error">{{ error }}</div>
+        {% endif %}
+        <form action="/portal-login" method="POST">
+            <label style="font-size: 0.75rem; color: #94a3b8;">Portal Username</label>
+            <input type="text" name="username" placeholder="Username" required autocomplete="off">
+            <label style="font-size: 0.75rem; color: #94a3b8; margin-top: 10px; display: block;">Portal Password</label>
+            <input type="password" name="password" placeholder="Password" required>
+            <button type="submit">Access Trading Terminal</button>
+        </form>
     </div>
+{% elif view == 'admin' %}
+    <div class="box box-admin">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h1>🛡️ ADMIN BACKOFFICE</h1>
+            <a href="/portal-logout" style="color: #ef4444; font-size: 0.8rem; text-decoration: none; font-weight: bold;">Logout Admin</a>
+        </div>
 
-    <script>
-        async function submitLogin() {
-            const btn = document.getElementById('login-btn');
-            const errBox = document.getElementById('err-box');
-            errBox.style.display = 'none';
+        <div style="background: #0a0f1d; padding: 14px; border-radius: 8px; border: 1px solid #1e2e4a; margin-bottom: 18px;">
+            <h2 style="font-size: 0.85rem; color: #38bdf8; margin-bottom: 8px;">➕ Register New Trader</h2>
+            <form action="/admin/add-user" method="POST" style="display: flex; gap: 8px;">
+                <input type="text" name="username" placeholder="New Client Username" required style="margin: 0;">
+                <input type="password" name="password" placeholder="Set Password" required style="margin: 0;">
+                <button type="submit" style="margin: 0; width: auto; white-space: nowrap; padding: 0 20px;">Add User</button>
+            </form>
+        </div>
 
-            const payload = {
-                api_key: document.getElementById('api_key').value.trim(),
-                client_code: document.getElementById('client_code').value.trim(),
-                pin: document.getElementById('pin').value.trim(),
-                totp_secret: document.getElementById('totp_secret').value.trim()
-            };
+        <h2 style="font-size: 0.85rem; color: #94a3b8;">User Registry & Access Controls</h2>
+        <div style="overflow-x: auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Username</th>
+                        <th>Assigned Port</th>
+                        <th>Bot Status</th>
+                        <th>Access State</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for u in users %}
+                    <tr>
+                        <td>#{{ u.id }}</td>
+                        <td><b>{{ u.username }}</b></td>
+                        <td>Port {{ u.port }}</td>
+                        <td>
+                            {% if u.is_live %}
+                                <span class="badge-live">🟢 PROCESS RUNNING</span>
+                            {% else %}
+                                <span style="color: #64748b; font-size: 0.72rem;">⚪ IDLE</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if u.status == 'ACTIVE' %}
+                                <span class="tag-active">ACTIVE</span>
+                            {% else %}
+                                <span class="tag-blocked">BLOCKED</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a href="/admin/toggle-status/{{ u.id }}" 
+                               style="font-size: 0.75rem; color: {{ '#ef4444' if u.status == 'ACTIVE' else '#22c55e' }}; text-decoration: underline; font-weight: bold;">
+                                {{ 'Click to Block' if u.status == 'ACTIVE' else 'Click to Unblock' }}
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+{% endif %}
 
-            if (!payload.api_key || !payload.client_code || !payload.pin || !payload.totp_secret) {
-                errBox.innerText = "Please fill all credentials.";
-                errBox.style.display = 'block';
-                return;
-            }
-
-            btn.disabled = true;
-            btn.innerText = "Verifying with Angel One...";
-
-            try {
-                const res = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(payload)
-                });
-                const data = await res.json();
-
-                if (data.status === 'success') {
-                    window.location.href = '/';
-                } else {
-                    errBox.innerText = data.message || "Login failed.";
-                    errBox.style.display = 'block';
-                    btn.disabled = false;
-                    btn.innerText = "Connect Broker & Launch Terminal";
-                }
-            } catch (err) {
-                errBox.innerText = "Network Error. Please retry.";
-                errBox.style.display = 'block';
-                btn.disabled = false;
-                btn.innerText = "Connect Broker & Launch Terminal";
-            }
-        }
-    </script>
 </body>
 </html>
