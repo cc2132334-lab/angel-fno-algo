@@ -112,7 +112,16 @@
 
     <div class="header-bar">
         <h1 style="font-size: 1.00rem; font-weight: 800;">⚡ ALGO PRO TERMINAL</h1>
-        <button class="theme-btn" onclick="toggleTheme()" id="theme-btn">🌙 Dark Mode</button>
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <!-- USER LOGIN STATUS & LOGOUT -->
+            <div style="display: flex; align-items: center; gap: 5px; background: var(--card-bg); border: 1px solid var(--border); padding: 4px 10px; border-radius: 20px; font-size: 0.74rem;">
+                <span style="height: 7px; width: 7px; background-color: #22c55e; border-radius: 50%; display: inline-block;"></span>
+                <span id="portal-user-name" style="font-weight: bold; color: var(--text-main);">USER</span>
+            </div>
+            <a href="/portal-logout" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); padding: 4px 8px; border-radius: 6px; font-size: 0.74rem; font-weight: bold; text-decoration: none;">Logout</a>
+            
+            <button class="theme-btn" onclick="toggleTheme()" id="theme-btn">🌙 Dark Mode</button>
+        </div>
     </div>
 
     <div class="clock-card">
@@ -384,6 +393,15 @@
         let settingsRestored = false;
         let scanPoller = null;
         let cprPoller = null;
+
+        // Auto fetch username
+        fetch('/api/user-info')
+            .then(r => r.json())
+            .then(d => {
+                if (d && d.username && document.getElementById('portal-user-name')) {
+                    document.getElementById('portal-user-name').innerText = d.username.toUpperCase();
+                }
+            }).catch(() => {});
 
         const todayStr = new Date().toISOString().split('T')[0];
         document.getElementById('scan-date').value = todayStr;
