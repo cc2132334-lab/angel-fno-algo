@@ -102,7 +102,7 @@ def calculate_quantity(risk_amount, entry_price, sl_price):
     except Exception:
         return 1
 
-def fetch_candles(token, interval="FIVE_MINUTE", days=2):
+def fetch_candles(token, interval="FIVE_MINUTE", days=4):
     now = get_ist_now()
     from_date = (now - datetime.timedelta(days=days)).strftime("%Y-%m-%d 09:15")
     to_date = now.strftime("%Y-%m-%d %H:%M")
@@ -121,32 +121,9 @@ def fetch_candles(token, interval="FIVE_MINUTE", days=2):
         pass
     return None
 
-def fetch_daily_pdh_pdl(token):
-    now = get_ist_now()
-    from_date = (now - datetime.timedelta(days=12)).strftime("%Y-%m-%d 09:15")
-    to_date = (now - datetime.timedelta(days=1)).strftime("%Y-%m-%d 15:30")
-    params = {
-        "exchange": "NSE",
-        "symboltoken": str(token),
-        "interval": "ONE_DAY",
-        "fromdate": from_date,
-        "todate": to_date
-    }
-    try:
-        data = bot_state["smart_api"].getCandleData(params)
-        if data and data.get("status") and data.get("data"):
-            df = pd.DataFrame(data["data"], columns=["time", "open", "high", "low", "close", "volume"])
-            if not df.empty:
-                last_day = df.iloc[-1]
-                avg_5d_vol = float(df["volume"].tail(5).mean()) if len(df) >= 2 else float(last_day["volume"])
-                return float(last_day["high"]), float(last_day["low"]), float(last_day["close"]), float(last_day["volume"]), avg_5d_vol
-    except Exception:
-        pass
-    return None, None, None, 0, 1.0
-
 def load_fno_universe():
     try:
-        log("Downloading Angel One Master & strictly filtering F&O Cash stocks...")
+        log("Loading F&O Cash Universe...")
         url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
         res = requests.get(url, timeout=25)
         master = res.json()
@@ -179,27 +156,8 @@ def load_fno_universe():
                             "fut_token": fno_futures[clean_name]["fut_token"]
                         })
 
-        log(f"Verified {len(matched_stocks)} pure F&O Cash stocks. Loading PDH, PDL baselines...")
-
-        final_list = []
-        for item in matched_stocks:
-            time.sleep(0.015)
-            pdh, pdl, prev_close, last_vol, avg_vol = fetch_daily_pdh_pdl(item["token"])
-            final_list.append({
-                "symbol": item["symbol"],
-                "token": item["token"],
-                "name": item["name"],
-                "pdh": pdh or 0.0,
-                "pdl": pdl or 0.0,
-                "prev_close": prev_close or 0.0,
-                "last_daily_vol": last_vol or 0,
-                "avg_5d_vol": avg_vol if avg_vol > 0 else 1.0,
-                "fut_symbol": item["fut_symbol"],
-                "fut_token": item["fut_token"]
-            })
-
-        bot_state["fno_stocks"] = final_list
-        log(f"SUCCESS: {len(bot_state['fno_stocks'])} pure F&O Cash stocks loaded. Ready for scan.")
+        bot_state["fno_stocks"] = matched_stocks
+        log(f"SUCCESS: {len(bot_state['fno_stocks'])} pure F&O Cash stocks loaded. Terminal Active!")
         update_oi_stats()
     except Exception as e:
         log(f"Universe sync error: {e}")
@@ -268,7 +226,7 @@ def set_mode():
     return jsonify({"status": "error"})
 
 # =========================================================================
-# MANUAL SCANNER: FIRST 5 MINUTES (09:15-09:20 AM C1) ONLY
+# MANUAL SCANNER: STRICT VOLUME SMA 20 (SAME AS TRADINGVIEW)
 # =========================================================================
 @app.route('/api/manual-5x-scan', methods=['POST'])
 def manual_5x_scan():
@@ -284,24 +242,24 @@ def manual_5x_scan():
 
     try:
         target_dt = datetime.datetime.strptime(selected_date, "%Y-%m-%d")
-        from_dt = (target_dt - datetime.timedelta(days=10)).strftime("%Y-%m-%d 09:15")
+        from_dt = (target_dt - datetime.timedelta(days=8)).strftime("%Y-%m-%d 09:15")
         to_dt = (target_dt + datetime.timedelta(days=1)).strftime("%Y-%m-%d 15:30")
     except Exception:
         return jsonify({"status": "error", "message": "Invalid date format"})
 
     stocks_to_scan = bot_state["fno_stocks"]
     if not stocks_to_scan:
-        return jsonify({"status": "error", "message": "F&O universe loading... please wait 10 seconds"})
+        return jsonify({"status": "error", "message": "F&O universe loading... wait 5 seconds"})
 
     filtered_results = []
-    log(f"Manual 5x scan strictly checking First 5-Min (09:15 AM) candle for {selected_date}...")
+    log(f"Manual 5x scan started for: {selected_date} (Strict Volume SMA 20)...")
 
     for item in stocks_to_scan:
         if bot_state["scan_cancelled"]:
             log("Manual Scan stopped by user.")
             break
 
-        time.sleep(0.035)
+        time.sleep(0.03)
         params = {
             "exchange": "NSE",
             "symboltoken": str(item["token"]),
@@ -315,7 +273,10 @@ def manual_5x_scan():
                 df = pd.DataFrame(res["data"], columns=["time", "open", "high", "low", "close", "volume"])
                 df['time_str'] = df['time'].astype(str)
 
-                # Exactly match the first 5 minutes candle (09:15:00) of the selected date
+                # Calculate Volume SMA 20 using rolling window
+                df['vol_sma20'] = df['volume'].rolling(window=20).mean()
+
+                # Find the 09:15 C1 candle of selected date
                 c1_matches = df.index[
                     (df['time_str'].str.startswith(selected_date)) & 
                     (df['time_str'].str.contains("09:15"))
@@ -323,29 +284,28 @@ def manual_5x_scan():
 
                 if c1_matches:
                     c1_idx = c1_matches[0]
-                    # Get the preceding 20 candles prior to 09:15 of the target day
-                    start_idx = max(0, c1_idx - 20)
-                    prev_candles = df.iloc[start_idx:c1_idx]
-                    
-                    if len(prev_candles) >= 5:
-                        avg_vol = float(prev_candles["volume"].mean())
-                        c1_candle = df.iloc[c1_idx]
-                        c1_vol = float(c1_candle["volume"])
+                    c1_candle = df.iloc[c1_idx]
+                    c1_vol = float(c1_candle["volume"])
+                    sma20_vol = float(df.iloc[c1_idx]['vol_sma20'])
 
-                        # Strict 5x Volume on FIRST 5-minute candle
-                        if avg_vol > 0 and (c1_vol >= 5 * avg_vol):
-                            filtered_results.append({
-                                "symbol": item["symbol"].replace("-EQ", ""),
-                                "c1_high": float(c1_candle["high"]),
-                                "c1_low": float(c1_candle["low"]),
-                                "c1_volume": int(c1_vol),
-                                "avg_volume": int(avg_vol),
-                                "multiplier": round(c1_vol / avg_vol, 2)
-                            })
+                    # If rolling 20 is NaN (e.g. not enough candles before C1), fallback to available
+                    if pd.isna(sma20_vol) or sma20_vol <= 0:
+                        start_idx = max(0, c1_idx - 20)
+                        sma20_vol = float(df.iloc[start_idx:c1_idx+1]['volume'].mean())
+
+                    if sma20_vol > 0 and (c1_vol >= 5 * sma20_vol):
+                        filtered_results.append({
+                            "symbol": item["symbol"].replace("-EQ", ""),
+                            "c1_high": float(c1_candle["high"]),
+                            "c1_low": float(c1_candle["low"]),
+                            "c1_volume": int(c1_vol),
+                            "avg_volume": int(sma20_vol),
+                            "multiplier": round(c1_vol / sma20_vol, 2)
+                        })
         except Exception:
             continue
 
-    log(f"First 5-Min 5x Scan Finished: Found {len(filtered_results)} stock(s) for {selected_date}.")
+    log(f"Manual scan complete: {len(filtered_results)} stock(s) qualified.")
 
     return jsonify({
         "status": "success",
@@ -440,6 +400,9 @@ def place_live_exit_order(symbol, token, side, qty):
         log(f"LIVE EXIT ERROR: {e}")
         return None
 
+# =========================================================================
+# BACKGROUND LIVE STRATEGY (AUTO EXTRACTS PDH/PDL + VOLUME SMA 20)
+# =========================================================================
 def background_scanner():
     c1_scanned = False
 
@@ -468,31 +431,59 @@ def background_scanner():
             time.sleep(5)
             continue
 
+        # 09:20 AM - Accurate C1 Candle & Dynamic PDH/PDL Scan
         if not c1_scanned and now_time >= datetime.time(9, 20, 2):
-            log(f"09:20 AM: Scanning all {len(bot_state['fno_stocks'])} F&O stocks for 5x Volume + PDH/PDL Breakout...")
+            today_str = now_ist.strftime("%Y-%m-%d")
+            log(f"09:20 AM: Scanning {len(bot_state['fno_stocks'])} F&O stocks for Volume SMA20 5x + Breakout...")
             candidates = []
 
             for item in bot_state["fno_stocks"]:
-                time.sleep(0.04)
-                df = fetch_candles(item["token"])
-                if df is not None and len(df) >= 22:
-                    avg_vol = df.iloc[-22:-2]["volume"].mean()
-                    c1_candle = df.iloc[-2]
-                    c1_vol = float(c1_candle["volume"])
-                    c1_close = float(c1_candle["close"])
-                    c1_high = float(c1_candle["high"])
-                    c1_low = float(c1_candle["low"])
-                    pdh = item.get("pdh", 0)
-                    pdl = item.get("pdl", 0)
+                time.sleep(0.03)
+                df = fetch_candles(item["token"], days=4)
+                if df is not None and len(df) >= 25:
+                    df['time_str'] = df['time'].astype(str)
+                    df['date_part'] = df['time_str'].apply(lambda x: x[:10])
 
-                    if avg_vol > 0 and (c1_vol >= 5 * avg_vol):
-                        bias = None
-                        if pdh > 0 and c1_close > pdh:
-                            bias = "BULLISH_PDH_BREAKOUT"
-                        elif pdl > 0 and c1_close < pdl:
-                            bias = "BEARISH_PDL_BREAKDOWN"
+                    # Extract previous day High/Low dynamically
+                    unique_dates = df['date_part'].unique()
+                    pdh, pdl = 0.0, 0.0
+                    if len(unique_dates) >= 2:
+                        prev_day = unique_dates[-2]
+                        prev_df = df[df['date_part'] == prev_day]
+                        pdh = float(prev_df["high"].max())
+                        pdl = float(prev_df["low"].min())
 
-                        if bias:
+                    # Calculate Volume SMA 20
+                    df['vol_sma20'] = df['volume'].rolling(window=20).mean()
+
+                    # Today's C1 candle (09:15)
+                    c1_matches = df.index[
+                        (df['time_str'].str.startswith(today_str)) & 
+                        (df['time_str'].str.contains("09:15"))
+                    ].tolist()
+
+                    if c1_matches:
+                        c1_idx = c1_matches[0]
+                        c1_candle = df.iloc[c1_idx]
+                        c1_vol = float(c1_candle["volume"])
+                        c1_close = float(c1_candle["close"])
+                        c1_high = float(c1_candle["high"])
+                        c1_low = float(c1_candle["low"])
+                        sma20_vol = float(df.iloc[c1_idx]['vol_sma20'])
+
+                        if pd.isna(sma20_vol) or sma20_vol <= 0:
+                            sma20_vol = float(df.iloc[max(0, c1_idx-20):c1_idx+1]['volume'].mean())
+
+                        if sma20_vol > 0 and (c1_vol >= 5 * sma20_vol):
+                            bias = None
+                            if pdh > 0 and c1_close > pdh:
+                                bias = "BULLISH_PDH_BREAKOUT"
+                            elif pdl > 0 and c1_close < pdl:
+                                bias = "BEARISH_PDL_BREAKDOWN"
+                            else:
+                                # Breakout based on strong C1 candle body if inside range
+                                bias = "BULLISH_BREAKOUT" if c1_close > float(c1_candle["open"]) else "BEARISH_BREAKDOWN"
+
                             candidates.append({
                                 "symbol": item["symbol"],
                                 "token": item["token"],
@@ -503,15 +494,16 @@ def background_scanner():
                                 "c1_vol": int(c1_vol),
                                 "pdh": pdh,
                                 "pdl": pdl,
-                                "ratio": round(c1_vol / avg_vol, 2),
+                                "ratio": round(c1_vol / sma20_vol, 2),
                                 "order_state": "READY"
                             })
-                            log(f"Setup Qualified: {item['symbol']} ({round(c1_vol/avg_vol, 2)}x Vol) [{bias}]")
+                            log(f"Setup Qualified: {item['symbol']} ({round(c1_vol/sma20_vol, 2)}x SMA20 Vol) [{bias}]")
 
             bot_state["c1_candidates"] = candidates
             log(f"C1 Scan Complete: {len(candidates)} candidate(s) ready for continuous SL-M engine.")
             c1_scanned = True
 
+        # 09:25 AM to Cutoff Time: Armed Order & Execution
         if c1_scanned and now_time >= datetime.time(9, 25, 2):
             active_open_count = len([t for t in bot_state["active_trades"] if t["status"] == "OPEN"])
             pending_count = len([p for p in bot_state["pending_orders"] if p["status"] == "PENDING"])
@@ -524,7 +516,7 @@ def background_scanner():
                     if cand.get("order_state") != "READY":
                         continue
 
-                    df = fetch_candles(cand["token"])
+                    df = fetch_candles(cand["token"], days=2)
                     if df is not None and len(df) >= 2:
                         c2 = df.iloc[-1]
                         c2_high = float(c2["high"])
@@ -537,7 +529,7 @@ def background_scanner():
                         slm_trigger = 0.0
                         sl = 0.0
 
-                        if cand["bias"] == "BULLISH_PDH_BREAKOUT":
+                        if "BULLISH" in cand["bias"]:
                             if c2_close > c1_h:
                                 side = "BUY"
                                 slm_trigger = c2_high
@@ -547,7 +539,7 @@ def background_scanner():
                                 slm_trigger = c1_h
                                 sl = c2_low
 
-                        elif cand["bias"] == "BEARISH_PDL_BREAKDOWN":
+                        elif "BEARISH" in cand["bias"]:
                             if c2_close < c1_l:
                                 side = "SELL"
                                 slm_trigger = c2_low
@@ -600,6 +592,7 @@ def background_scanner():
                     if res and res.get("status") and res.get("data"):
                         ltp = float(res["data"]["ltp"])
 
+                        # Setup Invalidation: Breach of C1 Low for BUY / C1 High for SELL
                         is_invalid = False
                         if po["side"] == "BUY" and ltp < po["c1_low"]:
                             is_invalid = True
@@ -617,6 +610,7 @@ def background_scanner():
                             log(f"⚠️ SETUP INVALIDATED: {po['symbol']} cancelled! ({reason}). Rotating to next stock...")
                             continue
 
+                        # Trigger Fill
                         triggered = False
                         if po["side"] == "BUY" and ltp >= po["trigger_price"]:
                             triggered = True
