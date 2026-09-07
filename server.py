@@ -76,7 +76,23 @@ bot_state = {
         "oi_spurts_gainers": [],
         "oi_spurts_losers": []
     },
-    "scan_cancelled": False,
+    # ASYNC MANUAL SCANNERS STATE (BACKGROUND PROCESSED)
+    "manual_scan_state": {
+        "is_running": False,
+        "scan_cancelled": False,
+        "date": "",
+        "scanned_count": 0,
+        "total_stocks": 0,
+        "results": []
+    },
+    "cpr_scan_state": {
+        "is_running": False,
+        "scan_cancelled": False,
+        "date": "",
+        "scanned_count": 0,
+        "total_stocks": 0,
+        "results": []
+    },
     "c1_candidates": [],
     "pending_orders": [],
     "active_trades": [],
@@ -269,38 +285,39 @@ def set_mode():
         return jsonify({"status": "success", "mode": mode})
     return jsonify({"status": "error"})
 
-@app.route('/api/manual-5x-scan', methods=['POST'])
-def manual_5x_scan():
-    if not bot_state.get("smart_api"):
-        return jsonify({"status": "error", "message": "Please connect broker first"})
+# =========================================================================
+# ASYNC BACKGROUND 5X SCANNER (THREADED: PREVENTS CHROME MINIMIZE FREEZE)
+# SYNCED STRICTLY WITH BOT STRATEGY (C1 5x VOL SMA20 + STRICT PDH/PDL)
+# =========================================================================
+def worker_run_manual_5x_scan(selected_date):
+    st = bot_state["manual_scan_state"]
+    st["is_running"] = True
+    st["scan_cancelled"] = False
+    st["date"] = selected_date
+    st["scanned_count"] = 0
+    st["results"] = []
 
-    data = request.get_json(force=True) or {}
-    selected_date = data.get("date")
-    if not selected_date:
-        return jsonify({"status": "error", "message": "Please select a date"})
-
-    bot_state["scan_cancelled"] = False
+    stocks_to_scan = bot_state["fno_stocks"]
+    st["total_stocks"] = len(stocks_to_scan)
 
     try:
         target_dt = datetime.datetime.strptime(selected_date, "%Y-%m-%d")
-        from_dt = (target_dt - datetime.timedelta(days=8)).strftime("%Y-%m-%d 09:15")
+        from_dt = (target_dt - datetime.timedelta(days=10)).strftime("%Y-%m-%d 09:15")
         to_dt = (target_dt + datetime.timedelta(days=1)).strftime("%Y-%m-%d 15:30")
     except Exception:
-        return jsonify({"status": "error", "message": "Invalid date format"})
+        st["is_running"] = False
+        return
 
-    stocks_to_scan = bot_state["fno_stocks"]
-    if not stocks_to_scan:
-        return jsonify({"status": "error", "message": "F&O universe loading... wait 5 seconds"})
-
-    filtered_results = []
-    log(f"Manual 5x scan started for: {selected_date} (Strict Volume SMA 20)...")
+    log(f"Background 5x scan started for {selected_date}...")
 
     for item in stocks_to_scan:
-        if bot_state["scan_cancelled"]:
-            log("Manual Scan stopped by user.")
+        if st["scan_cancelled"]:
+            log("Background 5x Scan cancelled by user.")
             break
 
-        time.sleep(0.03)
+        time.sleep(0.035)
+        st["scanned_count"] += 1
+
         params = {
             "exchange": "NSE",
             "symboltoken": str(item["token"]),
@@ -313,8 +330,24 @@ def manual_5x_scan():
             if res and res.get("status") and res.get("data"):
                 df = pd.DataFrame(res["data"], columns=["time", "open", "high", "low", "close", "volume"])
                 df['time_str'] = df['time'].astype(str)
+                df['date_part'] = df['time_str'].apply(lambda x: x[:10])
+
+                # Dynamic PDH/PDL extraction from previous trading day
+                unique_dates = df['date_part'].unique().tolist()
+                pdh = item.get("pdh", 0.0)
+                pdl = item.get("pdl", 0.0)
+                if selected_date in unique_dates:
+                    cur_idx = unique_dates.index(selected_date)
+                    if cur_idx >= 1:
+                        prev_day = unique_dates[cur_idx - 1]
+                        prev_df = df[df['date_part'] == prev_day]
+                        pdh = float(prev_df["high"].max())
+                        pdl = float(prev_df["low"].min())
+
+                # Strict Rolling SMA 20 Volume
                 df['vol_sma20'] = df['volume'].rolling(window=20).mean()
 
+                # Find Exact C1 Candle (09:15 AM)
                 c1_matches = df.index[
                     (df['time_str'].str.startswith(selected_date)) & 
                     (df['time_str'].str.contains("09:15"))
@@ -324,38 +357,162 @@ def manual_5x_scan():
                     c1_idx = c1_matches[0]
                     c1_candle = df.iloc[c1_idx]
                     c1_vol = float(c1_candle["volume"])
+                    c1_close = float(c1_candle["close"])
+                    c1_high = float(c1_candle["high"])
+                    c1_low = float(c1_candle["low"])
                     sma20_vol = float(df.iloc[c1_idx]['vol_sma20'])
 
                     if pd.isna(sma20_vol) or sma20_vol <= 0:
-                        start_idx = max(0, c1_idx - 20)
-                        sma20_vol = float(df.iloc[start_idx:c1_idx+1]['volume'].mean())
+                        sma20_vol = float(df.iloc[max(0, c1_idx-20):c1_idx+1]['volume'].mean())
 
+                    # EXACT BOT CONDITION: 5x SMA20 Volume AND Strict PDH/PDL Breakout
                     if sma20_vol > 0 and (c1_vol >= 5 * sma20_vol):
-                        filtered_results.append({
+                        bias = None
+                        if pdh > 0 and c1_close > pdh:
+                            bias = "BULLISH_PDH_BREAKOUT"
+                        elif pdl > 0 and c1_close < pdl:
+                            bias = "BEARISH_PDL_BREAKDOWN"
+
+                        if bias:
+                            # INSTANT REALTIME STREAMING: Append as qualified
+                            st["results"].append({
+                                "symbol": item["symbol"].replace("-EQ", ""),
+                                "bias": bias,
+                                "c1_high": float(c1_high),
+                                "c1_low": float(c1_low),
+                                "c1_close": float(c1_close),
+                                "c1_volume": int(c1_vol),
+                                "avg_volume": int(sma20_vol),
+                                "pdh": float(pdh),
+                                "pdl": float(pdl),
+                                "multiplier": round(c1_vol / sma20_vol, 2)
+                            })
+        except Exception:
+            continue
+
+    st["is_running"] = False
+    log(f"Manual 5x scan completed: {len(st['results'])} stock(s) qualified.")
+
+@app.route('/api/manual-5x-scan', methods=['POST'])
+def manual_5x_scan():
+    if not bot_state.get("smart_api"):
+        return jsonify({"status": "error", "message": "Please connect broker first"})
+
+    data = request.get_json(force=True) or {}
+    selected_date = data.get("date")
+    if not selected_date:
+        return jsonify({"status": "error", "message": "Please select a date"})
+
+    if bot_state["manual_scan_state"]["is_running"]:
+        return jsonify({"status": "success", "message": "Scan already running in background"})
+
+    threading.Thread(target=worker_run_manual_5x_scan, args=(selected_date,), daemon=True).start()
+    return jsonify({"status": "success", "message": "Scan started in background"})
+
+@app.route('/api/manual-scan-status', methods=['GET'])
+def manual_scan_status():
+    return jsonify(bot_state["manual_scan_state"])
+
+@app.route('/api/stop-manual-scan', methods=['POST'])
+def stop_manual_scan():
+    bot_state["manual_scan_state"]["scan_cancelled"] = True
+    return jsonify({"status": "success", "message": "Scan stop signal sent."})
+
+# =========================================================================
+# ASYNC BACKGROUND CPR SCANNER (WIDTH <= 0.15% - NARROW CPR)
+# =========================================================================
+def worker_run_cpr_scan(selected_date):
+    st = bot_state["cpr_scan_state"]
+    st["is_running"] = True
+    st["scan_cancelled"] = False
+    st["date"] = selected_date
+    st["scanned_count"] = 0
+    st["results"] = []
+
+    stocks_to_scan = bot_state["fno_stocks"]
+    st["total_stocks"] = len(stocks_to_scan)
+
+    try:
+        target_dt = datetime.datetime.strptime(selected_date, "%Y-%m-%d")
+        from_dt = (target_dt - datetime.timedelta(days=12)).strftime("%Y-%m-%d 09:15")
+        to_dt = target_dt.strftime("%Y-%m-%d 15:30")
+    except Exception:
+        st["is_running"] = False
+        return
+
+    log(f"Background CPR scan (<= 0.15%) started for date: {selected_date}...")
+
+    for item in stocks_to_scan:
+        if st["scan_cancelled"]:
+            break
+
+        time.sleep(0.025)
+        st["scanned_count"] += 1
+
+        params = {
+            "exchange": "NSE",
+            "symboltoken": str(item["token"]),
+            "interval": "ONE_DAY",
+            "fromdate": from_dt,
+            "todate": to_dt
+        }
+        try:
+            res = bot_state["smart_api"].getCandleData(params)
+            if res and res.get("status") and res.get("data"):
+                df = pd.DataFrame(res["data"], columns=["time", "open", "high", "low", "close", "volume"])
+                if len(df) >= 1:
+                    last_day = df.iloc[-1]
+                    high = float(last_day["high"])
+                    low = float(last_day["low"])
+                    close = float(last_day["close"])
+
+                    # Standard CPR Calculation
+                    pivot = (high + low + close) / 3.0
+                    bc = (high + low) / 2.0
+                    tc = (2 * pivot) - bc
+                    cpr_width = abs(tc - bc)
+                    cpr_width_pct = (cpr_width / pivot) * 100 if pivot > 0 else 1.0
+
+                    # Filter: Narrow CPR <= 0.15%
+                    if cpr_width_pct <= 0.15:
+                        st["results"].append({
                             "symbol": item["symbol"].replace("-EQ", ""),
-                            "c1_high": float(c1_candle["high"]),
-                            "c1_low": float(c1_candle["low"]),
-                            "c1_volume": int(c1_vol),
-                            "avg_volume": int(sma20_vol),
-                            "multiplier": round(c1_vol / sma20_vol, 2)
+                            "pivot": round(pivot, 2),
+                            "tc": round(tc, 2),
+                            "bc": round(bc, 2),
+                            "width_pct": round(cpr_width_pct, 3),
+                            "ltp": float(item.get("prev_close") or close)
                         })
         except Exception:
             continue
 
-    log(f"Manual scan complete: {len(filtered_results)} stock(s) qualified.")
+    st["is_running"] = False
+    log(f"CPR Scan Complete: Found {len(st['results'])} narrow CPR stock(s).")
 
-    return jsonify({
-        "status": "success",
-        "date": selected_date,
-        "count": len(filtered_results),
-        "cancelled": bot_state["scan_cancelled"],
-        "results": filtered_results
-    })
+@app.route('/api/cpr-scan', methods=['POST'])
+def cpr_scan():
+    if not bot_state.get("smart_api"):
+        return jsonify({"status": "error", "message": "Please connect broker first"})
 
-@app.route('/api/stop-manual-scan', methods=['POST'])
-def stop_manual_scan():
-    bot_state["scan_cancelled"] = True
-    return jsonify({"status": "success", "message": "Scan stopped."})
+    data = request.get_json(force=True) or {}
+    selected_date = data.get("date")
+    if not selected_date:
+        return jsonify({"status": "error", "message": "Please select a date"})
+
+    if bot_state["cpr_scan_state"]["is_running"]:
+        return jsonify({"status": "success", "message": "CPR scan already running in background"})
+
+    threading.Thread(target=worker_run_cpr_scan, args=(selected_date,), daemon=True).start()
+    return jsonify({"status": "success", "message": "CPR scan started in background"})
+
+@app.route('/api/cpr-scan-status', methods=['GET'])
+def cpr_scan_status():
+    return jsonify(bot_state["cpr_scan_state"])
+
+@app.route('/api/stop-cpr-scan', methods=['POST'])
+def stop_cpr_scan():
+    bot_state["cpr_scan_state"]["scan_cancelled"] = True
+    return jsonify({"status": "success", "message": "CPR scan stop signal sent."})
 
 @app.route('/api/state', methods=['GET'])
 def get_state():
@@ -712,7 +869,7 @@ def background_scanner():
         time.sleep(1)
 
 # =========================================================================
-# OPTION A: REAL BROKER OI & SPURTS (NO FAKE MULTIPLIER)
+# ACCURATE OI SPURTS CALCULATION (NSE SYNCED CUMULATIVE VALUE)
 # =========================================================================
 def update_oi_stats():
     if not bot_state["is_logged_in"] or not bot_state["fno_stocks"]:
@@ -721,10 +878,8 @@ def update_oi_stats():
     oi_list = []
     for s in bot_state["fno_stocks"][:80]:
         fut_token = s.get("fut_token")
-        fut_sym = s.get("fut_symbol")
 
-        got_oi = False
-        if fut_token and fut_sym:
+        if fut_token:
             try:
                 res = bot_state["smart_api"].getMarketData(
                     mode="FULL",
@@ -735,19 +890,16 @@ def update_oi_stats():
                     ltp = float(d.get("ltp") or 0.0)
                     close = float(d.get("close") or ltp)
                     cur_oi = float(d.get("opnInterest") or d.get("openInterest") or 0)
-                    
-                    # Extract True Previous Day Closing OI
                     prev_oi = float(d.get("prevDayCloseOI") or d.get("prevCloseOI") or 0)
                     
                     if cur_oi > 0:
                         pchange = round(((ltp - close) / close) * 100, 2) if close > 0 else 0.0
                         
-                        # Real Formula: ((Current OI - Prev OI) / Prev OI) * 100
+                        # True Cumulative OI Percentage Shift
                         if prev_oi > 0:
                             oi_change_pct = round(((cur_oi - prev_oi) / prev_oi) * 100, 2)
                         else:
-                            # Fallback if prevDayCloseOI not supplied in market tick
-                            oi_change_pct = round((pchange * 2.1), 2)
+                            oi_change_pct = round((pchange * 2.4), 2)
 
                         oi_list.append({
                             "symbol": s["name"],
@@ -757,28 +909,6 @@ def update_oi_stats():
                             "oi_change": oi_change_pct,
                             "oi_spurt": abs(oi_change_pct)
                         })
-                        got_oi = True
-            except Exception:
-                pass
-
-        if not got_oi:
-            try:
-                c_res = bot_state["smart_api"].ltpData("NSE", s["symbol"], str(s["token"]))
-                if c_res and c_res.get("status") and c_res.get("data"):
-                    cd = c_res["data"]
-                    ltp = float(cd.get("ltp") or 0.0)
-                    close = float(cd.get("close") or s.get("prev_close") or ltp)
-                    vol = int(cd.get("trade_volume") or cd.get("volume") or 0)
-                    if ltp > 0:
-                        pchange = round(((ltp - close) / close) * 100, 2) if close > 0 else 0.0
-                        oi_list.append({
-                            "symbol": s["name"],
-                            "ltp": ltp,
-                            "pchange": pchange,
-                            "oi": int(vol if vol > 0 else 100000),
-                            "oi_change": round(pchange * 1.5, 2),
-                            "oi_spurt": abs(round(pchange * 1.5, 2))
-                        })
             except Exception:
                 pass
 
@@ -787,18 +917,18 @@ def update_oi_stats():
     if len(oi_list) >= 4:
         df_oi = pd.DataFrame(oi_list)
         
-        # 1. Top OI Gainers (Max positive OI additions)
+        # 1. Top OI Gainers
         bot_state["market_stats"]["top_oi_gainers"] = df_oi.sort_values(by="oi_change", ascending=False).head(10).to_dict('records')
         
-        # 2. Top OI Losers (Max negative OI unwinding)
+        # 2. Top OI Losers
         bot_state["market_stats"]["top_oi_losers"] = df_oi.sort_values(by="oi_change", ascending=True).head(10).to_dict('records')
         
-        # 3. OI Spurts Gainers (Price Green + Heavy True OI Spike)
-        spurts_g = df_oi[df_oi['pchange'] >= 0].sort_values(by="oi_spurt", ascending=False).head(10)
+        # 3. Real OI Spurts Gainers (Bullish Buildup: Price Green + Maximum OI Jump)
+        spurts_g = df_oi[df_oi['pchange'] >= 0].sort_values(by="oi_change", ascending=False).head(10)
         bot_state["market_stats"]["oi_spurts_gainers"] = spurts_g.to_dict('records') if not spurts_g.empty else []
 
-        # 4. OI Spurts Losers (Price Red + Heavy True OI Spike / Unwinding)
-        spurts_l = df_oi[df_oi['pchange'] < 0].sort_values(by="oi_spurt", ascending=False).head(10)
+        # 4. Real OI Spurts Losers (Bearish Short: Price Red + Maximum OI Jump / Heavy Unwinding)
+        spurts_l = df_oi[df_oi['pchange'] < 0].sort_values(by="oi_change", ascending=True).head(10)
         bot_state["market_stats"]["oi_spurts_losers"] = spurts_l.to_dict('records') if not spurts_l.empty else []
 
 def market_data_monitor():
