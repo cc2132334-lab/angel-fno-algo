@@ -3,6 +3,7 @@ import sys
 import time
 import sqlite3
 import datetime
+from dateutil import tz
 import subprocess
 import requests
 from flask import Flask, request, Response, redirect, render_template, session, jsonify
@@ -14,7 +15,12 @@ ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
 ADMIN_PASS = os.environ.get("ADMIN_PASS", "admin@123")
 DB_FILE = "users.db"
 
+IST = tz.gettz('Asia/Kolkata')
+
 running_instances = {}
+
+def get_ist_now():
+    return datetime.datetime.now(IST)
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
@@ -54,10 +60,34 @@ def is_expired(expiry_str):
         return False
     try:
         exp_dt = datetime.datetime.strptime(expiry_str, "%Y-%m-%d").date()
-        today = datetime.date.today()
+        today = get_ist_now().date()
         return today > exp_dt
     except Exception:
         return False
+
+def stop_user_instance(username):
+    if username in running_instances:
+        try:
+            running_instances[username]["proc"].terminate()
+        except Exception:
+            pass
+        running_instances.pop(username, None)
+
+def is_session_valid_today():
+    login_date = session.get("login_date")
+    now_ist = get_ist_now()
+    today_str = now_ist.strftime("%Y-%m-%d")
+
+    # Pichle din ka login expire
+    if login_date != today_str:
+        return False
+
+    # Raat 11:59 PM (23:59 IST) par auto logout
+    midnight_cutoff = datetime.time(23, 59)
+    if now_ist.time() >= midnight_cutoff:
+        return False
+
+    return True
 
 def ensure_user_process(username, port):
     if username in running_instances:
@@ -116,12 +146,7 @@ def portal_login():
         c.execute("UPDATE users SET status = 'BLOCKED' WHERE id = ?", (uid,))
         conn.commit()
         conn.close()
-        if username in running_instances:
-            try:
-                running_instances[username]["proc"].terminate()
-            except Exception:
-                pass
-            running_instances.pop(username, None)
+        stop_user_instance(username)
         return render_template('login.html', view="login", error=f"Subscription Expired on {expiry_date}. Contact admin to renew.")
 
     if status != 'ACTIVE':
@@ -129,13 +154,20 @@ def portal_login():
         return render_template('login.html', view="login", error="Account Blocked. Contact admin.")
 
     conn.close()
+
+    now_ist = get_ist_now()
     session["user"] = username
     session["port"] = port
+    session["login_date"] = now_ist.strftime("%Y-%m-%d")
+
     ensure_user_process(username, port)
     return redirect('/')
 
 @app.route('/portal-logout')
 def portal_logout():
+    user = session.get("user")
+    if user:
+        stop_user_instance(user)
     session.clear()
     return redirect('/portal-login')
 
@@ -153,7 +185,7 @@ def admin_panel():
     conn.close()
 
     user_list = []
-    today = datetime.date.today()
+    today = get_ist_now().date()
     for u in users:
         is_live = False
         if u[1] in running_instances and running_instances[u[1]]["proc"].poll() is None:
@@ -180,7 +212,7 @@ def admin_panel():
             "expired": expired, "created_at": u[6], "is_live": is_live
         })
 
-    default_exp = (datetime.date.today() + datetime.timedelta(days=30)).strftime("%Y-%m-%d")
+    default_exp = (today + datetime.timedelta(days=30)).strftime("%Y-%m-%d")
     return render_template('login.html', view="admin", users=user_list, default_exp=default_exp)
 
 @app.route('/admin/add-user', methods=['POST'])
@@ -236,12 +268,8 @@ def admin_toggle_status(user_id):
         c.execute("UPDATE users SET status = ? WHERE id = ?", (new_status, user_id))
         conn.commit()
 
-        if new_status == 'BLOCKED' and uname in running_instances:
-            try:
-                running_instances[uname]["proc"].terminate()
-            except Exception:
-                pass
-            running_instances.pop(uname, None)
+        if new_status == 'BLOCKED':
+            stop_user_instance(uname)
 
     conn.close()
     return redirect('/admin')
@@ -260,15 +288,8 @@ def admin_delete_user(user_id):
         c.execute("DELETE FROM users WHERE id = ?", (user_id,))
         conn.commit()
 
-        # Stop background bot process if running
-        if uname in running_instances:
-            try:
-                running_instances[uname]["proc"].terminate()
-            except Exception:
-                pass
-            running_instances.pop(uname, None)
+        stop_user_instance(uname)
 
-        # Remove user's individual bot config file
         user_conf = f"bot_config_{uname}.json"
         if os.path.exists(user_conf):
             try:
@@ -293,6 +314,12 @@ def master_proxy_handler(path):
     if not user or not port:
         return redirect('/portal-login')
 
+    # Midnight 11:59 PM Auto-Logout Check
+    if not is_session_valid_today():
+        stop_user_instance(user)
+        session.clear()
+        return redirect('/portal-login')
+
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT id, status, expiry_date FROM users WHERE username = ?", (user,))
@@ -309,12 +336,7 @@ def master_proxy_handler(path):
         c.execute("UPDATE users SET status = 'BLOCKED' WHERE id = ?", (uid,))
         conn.commit()
         conn.close()
-        if user in running_instances:
-            try:
-                running_instances[user]["proc"].terminate()
-            except Exception:
-                pass
-            running_instances.pop(user, None)
+        stop_user_instance(user)
         session.clear()
         return redirect('/portal-login')
 
