@@ -223,7 +223,7 @@
 
             <div style="margin-top: 10px;">
                 <div style="display: flex; justify-content: space-between;">
-                    <label style="font-size: 0.72rem; color: var(--text-muted);">Target Book Ratio (1:1=Full Exit | 1:1 Cost Shift | Trail after 1:2):</label>
+                    <label style="font-size: 0.72rem; color: var(--text-muted);">Target Book Ratio (1:1/1:2 Full Exit | >1:2 Cost Shift & Trail):</label>
                     <span id="rr-label" style="font-weight: bold; color: var(--accent);">1:3</span>
                 </div>
                 <input type="range" id="rr-slider" min="1" max="10" step="1" value="3" oninput="updateRR(this.value)" onchange="syncSettings()">
@@ -238,12 +238,19 @@
             </div>
         </div>
 
-        <!-- DEDICATED HISTORICAL P&L & ANALYTICS WINDOW -->
+        <!-- HISTORICAL P&L & ANALYTICS WITH DATE SELECTION -->
         <div class="card" style="border-left: 4px solid #0284c7;">
-            <h2>📊 Historical Daily P&L & Analytics</h2>
-            <div class="grid-3" style="margin-top: 4px; margin-bottom: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                <h2>📊 Historical Daily P&L & Analytics</h2>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                    <input type="date" id="hist-date-picker" style="width: 140px; padding: 4px 8px; font-size: 0.76rem; margin: 0;">
+                    <button onclick="loadHistoricalByDate()" style="width: auto; padding: 5px 12px; font-size: 0.75rem; background: var(--accent); color: white; margin: 0;">View</button>
+                </div>
+            </div>
+
+            <div class="grid-3" style="margin-top: 8px; margin-bottom: 8px;">
                 <div style="background: var(--bg); border: 1px solid var(--border); padding: 8px; border-radius: 6px; text-align: center;">
-                    <span style="font-size: 0.68rem; color: var(--text-muted);">TODAY REALIZED P&L</span>
+                    <span style="font-size: 0.68rem; color: var(--text-muted);">SELECTED DATE REALIZED P&L</span>
                     <div id="hist-realized-pnl" style="font-size: 1.15rem; font-weight: bold; color: var(--text-muted);">₹0.00</div>
                 </div>
                 <div style="background: var(--bg); border: 1px solid var(--border); padding: 8px; border-radius: 6px; text-align: center;">
@@ -254,6 +261,27 @@
                     <span style="font-size: 0.68rem; color: var(--text-muted);">EXECUTED TRADES</span>
                     <div id="hist-total-trades" style="font-size: 1.15rem; font-weight: bold; color: var(--text-main);">0 Trades</div>
                 </div>
+            </div>
+
+            <!-- DETAILED TRADE BREAKDOWN TABLE FOR SELECTED DATE -->
+            <div class="table-responsive" style="max-height: 220px; overflow-y: auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Symbol</th>
+                            <th>Side</th>
+                            <th>Entry Price</th>
+                            <th>Exit Price</th>
+                            <th>Target</th>
+                            <th>Profit / Loss</th>
+                            <th>Exit Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody id="hist-date-trades-body">
+                        <tr><td colspan="8" style="text-align:center; color: var(--text-muted);">Select a date to view trades breakdown</td></tr>
+                    </tbody>
+                </table>
             </div>
         </div>
 
@@ -378,12 +406,12 @@
             </div>
         </div>
 
-        <!-- EXECUTION, ACTIVE & HISTORY TABS -->
+        <!-- EXECUTION TABS -->
         <div class="card">
             <div class="tabs" id="execution-tabs">
                 <button class="tab-btn active" onclick="switchTradesTab('active', this)">⚡ Active Positions</button>
                 <button class="tab-btn" onclick="switchTradesTab('pending', this)">⏳ Pending Orders</button>
-                <button class="tab-btn" onclick="switchTradesTab('history', this)">📜 Trade History Ledger</button>
+                <button class="tab-btn" onclick="switchTradesTab('history', this)">📜 Live Session History</button>
                 <button class="tab-btn" onclick="switchTradesTab('logs', this)">📝 Activity Logs</button>
             </div>
 
@@ -456,6 +484,7 @@
         const todayStr = new Date().toISOString().split('T')[0];
         document.getElementById('scan-date').value = todayStr;
         document.getElementById('cpr-date').value = todayStr;
+        document.getElementById('hist-date-picker').value = todayStr;
 
         function restoreLocalSettings() {
             try {
@@ -513,7 +542,6 @@
             });
         }
 
-        // ================= MANUAL EXIT CALL =================
         async function manualExit(tradeId, symbol) {
             if(!confirm(`Are you sure you want to exit ${symbol} position at Market Price?`)) return;
             const res = await fetch('/api/manual-exit', {
@@ -524,9 +552,51 @@
             const data = await res.json();
             if(data.status === 'success') {
                 refresh();
+                loadHistoricalByDate();
             } else {
                 alert("Exit Failed: " + data.message);
             }
+        }
+
+        // ================= LOAD HISTORICAL BY DATE =================
+        async function loadHistoricalByDate() {
+            const selectedDate = document.getElementById('hist-date-picker').value;
+            if(!selectedDate) return;
+
+            try {
+                const res = await fetch(`/api/history-by-date?date=${selectedDate}`);
+                const data = await res.json();
+
+                const pnlBox = document.getElementById('hist-realized-pnl');
+                pnlBox.innerText = (data.realized_pnl >= 0 ? '+₹' : '-₹') + Math.abs(data.realized_pnl).toFixed(2);
+                pnlBox.style.color = data.realized_pnl >= 0 ? 'var(--up)' : 'var(--down)';
+
+                document.getElementById('hist-win-rate').innerText = `${data.win_rate}% (${data.wins}W / ${data.losses}L)`;
+                document.getElementById('hist-total-trades').innerText = `${data.total_trades} Trades`;
+
+                const tbody = document.getElementById('hist-date-trades-body');
+                if(!data.trades || data.trades.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:var(--text-muted);">No trades executed on ${selectedDate}</td></tr>`;
+                    return;
+                }
+
+                let html = '';
+                data.trades.slice().reverse().forEach(h => {
+                    const resColor = h.pnl >= 0 ? 'var(--up)' : 'var(--down)';
+                    const sideClass = h.side === 'BUY' ? 'tag-buy' : 'tag-sell';
+                    html += `<tr>
+                        <td><small style="color:var(--text-muted)">${h.time}</small></td>
+                        <td><b>${h.symbol}</b></td>
+                        <td><span class="${sideClass}">${h.side}</span></td>
+                        <td>₹${h.entry}</td>
+                        <td>₹${h.exit}</td>
+                        <td>₹${h.target || '--'}</td>
+                        <td style="color:${resColor}; font-weight:bold;">${h.pnl >= 0 ? '+' : ''}₹${h.pnl}</td>
+                        <td><b>${h.status}</b></td>
+                    </tr>`;
+                });
+                tbody.innerHTML = html;
+            } catch(e) {}
         }
 
         // ================= MANUAL 5X SCANNER =================
@@ -700,6 +770,7 @@
                 document.getElementById('main-terminal').style.display = 'block';
                 syncSettings();
                 refresh();
+                loadHistoricalByDate();
             } else {
                 alert("Login Error: " + data.message);
             }
@@ -983,22 +1054,9 @@
                 pnlElem.innerText = (data.total_pnl >= 0 ? '+₹' : '-₹') + Math.abs(data.total_pnl).toFixed(2);
                 pnlElem.style.color = data.total_pnl >= 0 ? 'var(--up)' : 'var(--down)';
 
-                // Update Dedicated Historical P&L Window
-                const hist = data.trade_history || [];
-                const closedPnl = hist.reduce((acc, h) => acc + (parseFloat(h.pnl) || 0), 0);
-                const wins = hist.filter(h => (parseFloat(h.pnl) || 0) > 0).length;
-                const winRate = hist.length > 0 ? Math.round((wins / hist.length) * 100) : 0;
-
-                const pnlBox = document.getElementById('hist-realized-pnl');
-                pnlBox.innerText = (closedPnl >= 0 ? '+₹' : '-₹') + Math.abs(closedPnl).toFixed(2);
-                pnlBox.style.color = closedPnl >= 0 ? 'var(--up)' : 'var(--down)';
-                document.getElementById('hist-win-rate').innerText = `${winRate}% (${wins}W / ${hist.length - wins}L)`;
-                document.getElementById('hist-total-trades').innerText = `${hist.length} Trades`;
-
                 renderQualifiedSetups();
                 renderOIStats();
 
-                // Active Positions with Live Achieved RR & Manual Exit Button
                 if(data.active_trades && data.active_trades.length > 0) {
                     let html = '';
                     data.active_trades.forEach(t => {
@@ -1042,6 +1100,7 @@
 
         setInterval(refresh, 2500);
         refresh();
+        loadHistoricalByDate();
     </script>
 </body>
 </html>
