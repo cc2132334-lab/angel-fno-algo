@@ -78,6 +78,7 @@
         .tab-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
 
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
+        .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 6px; }
 
         .table-responsive {
             width: 100%;
@@ -103,6 +104,23 @@
         .highlight-oi { background: rgba(147, 51, 234, 0.15); color: #9333ea; padding: 2px 6px; border-radius: 4px; font-weight: bold; }
         [data-theme="dark"] .highlight-oi { color: #c084fc; }
 
+        .btn-manual-exit {
+            background: rgba(239, 68, 68, 0.15);
+            color: #ef4444;
+            border: 1px solid rgba(239, 68, 68, 0.4);
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 0.72rem;
+            cursor: pointer;
+            width: auto;
+            margin: 0;
+            font-weight: bold;
+        }
+        .btn-manual-exit:hover {
+            background: #ef4444;
+            color: white;
+        }
+
         .log-box { background: rgba(15, 23, 42, 0.04); border: 1px solid var(--border); border-radius: 8px; padding: 10px; max-height: 250px; overflow-y: auto; font-family: monospace; font-size: 0.72rem; line-height: 1.5; }
         [data-theme="dark"] .log-box { background: rgba(0, 0, 0, 0.3); }
         .log-entry { margin-bottom: 4px; border-bottom: 1px dashed rgba(148, 163, 184, 0.15); padding-bottom: 2px; }
@@ -113,7 +131,6 @@
     <div class="header-bar">
         <h1 style="font-size: 1.00rem; font-weight: 800;">⚡ ALGO PRO TERMINAL</h1>
         <div style="display: flex; align-items: center; gap: 8px;">
-            <!-- USER LOGIN STATUS & LOGOUT -->
             <div style="display: flex; align-items: center; gap: 5px; background: var(--card-bg); border: 1px solid var(--border); padding: 4px 10px; border-radius: 20px; font-size: 0.74rem;">
                 <span style="height: 7px; width: 7px; background-color: #22c55e; border-radius: 50%; display: inline-block;"></span>
                 <span id="portal-user-name" style="font-weight: bold; color: var(--text-main);">USER</span>
@@ -162,7 +179,7 @@
         <div class="card" style="border-left: 4px solid #f59e0b;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                 <div>
-                    <span style="font-size: 0.70rem; color: var(--text-muted);">REALIZED TODAY'S P&L</span>
+                    <span style="font-size: 0.70rem; color: var(--text-muted);">TOTAL NET P&L (LIVE + REALIZED)</span>
                     <div id="pnl-display" style="font-size: 1.25rem; font-weight: bold; color: var(--text-muted);">₹0.00</div>
                 </div>
                 <div id="mode-badge" style="font-size: 0.72rem; font-weight: bold; color: var(--accent);">SIMULATION MODE</div>
@@ -206,7 +223,7 @@
 
             <div style="margin-top: 10px;">
                 <div style="display: flex; justify-content: space-between;">
-                    <label style="font-size: 0.72rem; color: var(--text-muted);">Target Book Ratio (Trail from 1:2):</label>
+                    <label style="font-size: 0.72rem; color: var(--text-muted);">Target Book Ratio (1:1=Full Exit | 1:1 Cost Shift | Trail after 1:2):</label>
                     <span id="rr-label" style="font-weight: bold; color: var(--accent);">1:3</span>
                 </div>
                 <input type="range" id="rr-slider" min="1" max="10" step="1" value="3" oninput="updateRR(this.value)" onchange="syncSettings()">
@@ -218,6 +235,25 @@
                     <span id="risk-label" style="font-weight: bold; color: var(--up);">₹500</span>
                 </div>
                 <input type="range" id="risk-slider" min="50" max="5000" step="50" value="500" oninput="updateRisk(this.value)" onchange="syncSettings()">
+            </div>
+        </div>
+
+        <!-- DEDICATED HISTORICAL P&L & ANALYTICS WINDOW -->
+        <div class="card" style="border-left: 4px solid #0284c7;">
+            <h2>📊 Historical Daily P&L & Analytics</h2>
+            <div class="grid-3" style="margin-top: 4px; margin-bottom: 8px;">
+                <div style="background: var(--bg); border: 1px solid var(--border); padding: 8px; border-radius: 6px; text-align: center;">
+                    <span style="font-size: 0.68rem; color: var(--text-muted);">TODAY REALIZED P&L</span>
+                    <div id="hist-realized-pnl" style="font-size: 1.15rem; font-weight: bold; color: var(--text-muted);">₹0.00</div>
+                </div>
+                <div style="background: var(--bg); border: 1px solid var(--border); padding: 8px; border-radius: 6px; text-align: center;">
+                    <span style="font-size: 0.68rem; color: var(--text-muted);">WINNING ACCURACY</span>
+                    <div id="hist-win-rate" style="font-size: 1.15rem; font-weight: bold; color: var(--accent);">0%</div>
+                </div>
+                <div style="background: var(--bg); border: 1px solid var(--border); padding: 8px; border-radius: 6px; text-align: center;">
+                    <span style="font-size: 0.68rem; color: var(--text-muted);">EXECUTED TRADES</span>
+                    <div id="hist-total-trades" style="font-size: 1.15rem; font-weight: bold; color: var(--text-main);">0 Trades</div>
+                </div>
             </div>
         </div>
 
@@ -246,10 +282,10 @@
             </div>
         </div>
 
-        <!-- SYNCED REALTIME 5X MANUAL SCANNER (BACKGROUND ASYNC) -->
+        <!-- SYNCED REALTIME 5X MANUAL SCANNER -->
         <div class="card">
-            <h2>🔍 Manual 5x Volume + PDH/PDL Scanner (Bot Parameters)</h2>
-            <p style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 8px;">Date select karein. Background me run hoga aur qualify hote hi live list update hogi.</p>
+            <h2>🔍 Manual 5x Volume + PDH/PDL Scanner (Watch Only)</h2>
+            <p style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 8px;">C1 me 5x SMA20 Volume aur PDH/PDL todne wale sabhi stocks yahan render honge.</p>
             
             <div class="grid-2">
                 <div>
@@ -282,7 +318,7 @@
             </div>
         </div>
 
-        <!-- NEW CPR SCANNER (NARROW CPR <= 0.15%) -->
+        <!-- CPR SCANNER -->
         <div class="card">
             <h2>📐 Narrow CPR Scanner (Width &le; 0.15% - F&O Cash)</h2>
             <p style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 8px;">Next trading session ke liye tight range breakout (Trending) stocks scan karein.</p>
@@ -317,7 +353,7 @@
             </div>
         </div>
 
-        <!-- OPEN INTEREST & REAL SPURTS (NSE SYNCED) -->
+        <!-- OPEN INTEREST -->
         <div class="card">
             <h2>📈 Open Interest & Real OI Spurts (Watch Only)</h2>
             <div class="tabs" id="oi-tabs">
@@ -342,19 +378,34 @@
             </div>
         </div>
 
+        <!-- EXECUTION, ACTIVE & HISTORY TABS -->
         <div class="card">
             <div class="tabs" id="execution-tabs">
                 <button class="tab-btn active" onclick="switchTradesTab('active', this)">⚡ Active Positions</button>
                 <button class="tab-btn" onclick="switchTradesTab('pending', this)">⏳ Pending Orders</button>
-                <button class="tab-btn" onclick="switchTradesTab('history', this)">📜 Trade History</button>
+                <button class="tab-btn" onclick="switchTradesTab('history', this)">📜 Trade History Ledger</button>
                 <button class="tab-btn" onclick="switchTradesTab('logs', this)">📝 Activity Logs</button>
             </div>
 
+            <!-- ACTIVE TRADES WITH MANUAL EXIT & LIVE RR -->
             <div id="active-view">
                 <div class="table-responsive">
                     <table>
-                        <thead><tr><th>Symbol</th><th>Side</th><th>Entry</th><th>SL</th><th>Qty</th><th>P&L</th><th>Status</th></tr></thead>
-                        <tbody id="active-body"><tr><td colspan="7" style="text-align:center; color: var(--text-muted);">No open positions</td></tr></tbody>
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Side</th>
+                                <th>Entry</th>
+                                <th>SL</th>
+                                <th>Target</th>
+                                <th>Achieved RR</th>
+                                <th>Qty</th>
+                                <th>P&L</th>
+                                <th>Status</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="active-body"><tr><td colspan="10" style="text-align:center; color: var(--text-muted);">No open positions</td></tr></tbody>
                     </table>
                 </div>
             </div>
@@ -371,8 +422,8 @@
             <div id="history-view" style="display: none;">
                 <div class="table-responsive">
                     <table>
-                        <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Entry → Exit</th><th>P&L</th><th>Result</th></tr></thead>
-                        <tbody id="history-body"><tr><td colspan="6" style="text-align:center; color: var(--text-muted);">No closed trades yet</td></tr></tbody>
+                        <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Entry → Exit</th><th>Target</th><th>P&L</th><th>Result</th></tr></thead>
+                        <tbody id="history-body"><tr><td colspan="7" style="text-align:center; color: var(--text-muted);">No closed trades yet</td></tr></tbody>
                     </table>
                 </div>
             </div>
@@ -394,7 +445,6 @@
         let scanPoller = null;
         let cprPoller = null;
 
-        // Auto fetch username
         fetch('/api/user-info')
             .then(r => r.json())
             .then(d => {
@@ -463,7 +513,23 @@
             });
         }
 
-        // ================= MANUAL 5X SCANNER (LIVE STREAMING & ASYNC) =================
+        // ================= MANUAL EXIT CALL =================
+        async function manualExit(tradeId, symbol) {
+            if(!confirm(`Are you sure you want to exit ${symbol} position at Market Price?`)) return;
+            const res = await fetch('/api/manual-exit', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({trade_id: tradeId})
+            });
+            const data = await res.json();
+            if(data.status === 'success') {
+                refresh();
+            } else {
+                alert("Exit Failed: " + data.message);
+            }
+        }
+
+        // ================= MANUAL 5X SCANNER =================
         async function startManual5xScan() {
             const dateVal = document.getElementById('scan-date').value;
             if(!dateVal) return alert("Please select a date first");
@@ -538,7 +604,7 @@
             document.getElementById('btn-stop-scan').style.display = 'none';
         }
 
-        // ================= CPR SCANNER (LIVE STREAMING & ASYNC) =================
+        // ================= CPR SCANNER =================
         async function startCPRScan() {
             const dateVal = document.getElementById('cpr-date').value;
             if(!dateVal) return alert("Please select a date first");
@@ -583,7 +649,7 @@
                     scanBtn.disabled = false;
                     stopBtn.style.display = 'none';
                     clearInterval(cprPoller);
-                    summaryElem.innerText = `Scan Complete! Found: ${st.results.length} Narrow CPR (Trending Setup)`;
+                    summaryElem.innerText = `Scan Complete! Found: ${st.results.length} Narrow CPR`;
                 }
 
                 if (st.results && st.results.length > 0) {
@@ -711,7 +777,10 @@
                 penV.style.display = 'block';
                 renderPending();
             }
-            else if(tab === 'history') hisV.style.display = 'block';
+            else if(tab === 'history') {
+                hisV.style.display = 'block';
+                renderHistory();
+            }
             else if(tab === 'logs') {
                 logV.style.display = 'block';
                 renderLogs();
@@ -768,9 +837,11 @@
                 const tag = isBull ? '<span class="tag-buy">BULLISH BREAKOUT</span>' : '<span class="tag-sell">BEARISH BREAKDOWN</span>';
                 const pdLevel = isBull ? `PDH: ₹${c.pdh}` : `PDL: ₹${c.pdl}`;
                 
-                let stateBadge = `<span class="tag-pending">${c.order_state}</span>`;
-                if(c.order_state === 'PENDING_PLACED') stateBadge = `<span class="tag-buy">ARMED</span>`;
-                if(c.order_state === 'INVALIDATED') stateBadge = `<span class="tag-invalid">INVALID</span>`;
+                let stateBadge = `<span class="tag-pending">${c.display_status || c.order_state}</span>`;
+                if(c.display_status === 'SL-M ORDER PLACED') stateBadge = `<span class="tag-buy">SL-M ARMED</span>`;
+                if(c.display_status === 'LIMIT ORDER PLACED') stateBadge = `<span class="tag-pending">LIMIT ARMED</span>`;
+                if(c.display_status === 'INVALID' || c.order_state === 'PERMANENTLY_INVALID') stateBadge = `<span class="tag-invalid">INVALID</span>`;
+                if(c.display_status === 'CROSSED MORE THAN 1:1') stateBadge = `<span class="tag-invalid">CROSSED > 1:1</span>`;
 
                 html += `<tr>
                     <td><b>${c.symbol.replace('-EQ','')}</b></td>
@@ -796,7 +867,8 @@
                 const sideClass = p.side === 'BUY' ? 'tag-buy' : 'tag-sell';
                 const invalTxt = p.side === 'BUY' ? `< ₹${p.c1_low}` : `> ₹${p.c1_high}`;
                 let statusBadge = `<span class="tag-pending">${p.status}</span>`;
-                if(p.status === 'CANCELLED_INVALID') statusBadge = `<span class="tag-invalid">INVALID (BREAK)</span>`;
+                if(p.status === 'CANCELLED_INVALID') statusBadge = `<span class="tag-invalid">INVALID (BREACH)</span>`;
+                if(p.status === 'CANCELLED_CUTOFF') statusBadge = `<span class="tag-invalid">CUTOFF EXPIRED</span>`;
                 if(p.status === 'TRIGGERED') statusBadge = `<span class="tag-buy">FILLED</span>`;
 
                 html += `<tr>
@@ -810,6 +882,31 @@
                 </tr>`;
             });
             document.getElementById('pending-body').innerHTML = html;
+        }
+
+        function renderHistory() {
+            if(!cachedState) return;
+            const hist = cachedState.trade_history || [];
+
+            if(hist.length === 0) {
+                document.getElementById('history-body').innerHTML = `<tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No closed trades yet</td></tr>`;
+                return;
+            }
+
+            let histHtml = '';
+            hist.slice().reverse().forEach(h => {
+                const resColor = h.pnl >= 0 ? 'var(--up)' : 'var(--down)';
+                histHtml += `<tr>
+                    <td><small style="color:var(--text-muted)">${h.time}</small></td>
+                    <td><b>${h.symbol}</b></td>
+                    <td>${h.side}</td>
+                    <td>₹${h.entry} → ₹${h.exit}</td>
+                    <td>₹${h.target || '--'}</td>
+                    <td style="color:${resColor}; font-weight:bold;">₹${h.pnl}</td>
+                    <td><b>${h.status}</b></td>
+                </tr>`;
+            });
+            document.getElementById('history-body').innerHTML = histHtml;
         }
 
         function renderLogs() {
@@ -883,48 +980,57 @@
                 }
 
                 const pnlElem = document.getElementById('pnl-display');
-                pnlElem.innerText = (data.total_pnl >= 0 ? '+₹' : '-₹') + Math.abs(data.total_pnl);
+                pnlElem.innerText = (data.total_pnl >= 0 ? '+₹' : '-₹') + Math.abs(data.total_pnl).toFixed(2);
                 pnlElem.style.color = data.total_pnl >= 0 ? 'var(--up)' : 'var(--down)';
+
+                // Update Dedicated Historical P&L Window
+                const hist = data.trade_history || [];
+                const closedPnl = hist.reduce((acc, h) => acc + (parseFloat(h.pnl) || 0), 0);
+                const wins = hist.filter(h => (parseFloat(h.pnl) || 0) > 0).length;
+                const winRate = hist.length > 0 ? Math.round((wins / hist.length) * 100) : 0;
+
+                const pnlBox = document.getElementById('hist-realized-pnl');
+                pnlBox.innerText = (closedPnl >= 0 ? '+₹' : '-₹') + Math.abs(closedPnl).toFixed(2);
+                pnlBox.style.color = closedPnl >= 0 ? 'var(--up)' : 'var(--down)';
+                document.getElementById('hist-win-rate').innerText = `${winRate}% (${wins}W / ${hist.length - wins}L)`;
+                document.getElementById('hist-total-trades').innerText = `${hist.length} Trades`;
 
                 renderQualifiedSetups();
                 renderOIStats();
 
+                // Active Positions with Live Achieved RR & Manual Exit Button
                 if(data.active_trades && data.active_trades.length > 0) {
                     let html = '';
                     data.active_trades.forEach(t => {
+                        if(t.status !== 'OPEN') return;
                         const tag = t.side === 'BUY' ? 'tag-buy' : 'tag-sell';
                         const pnlColor = t.pnl >= 0 ? 'var(--up)' : 'var(--down)';
+                        const achievedColor = t.cost_trailed ? 'var(--up)' : 'var(--accent)';
+
                         html += `<tr>
                             <td><b>${t.symbol}</b></td>
                             <td><span class="${tag}">${t.side}</span></td>
-                            <td>${t.entry}</td>
-                            <td>${t.sl}</td>
+                            <td>₹${t.entry}</td>
+                            <td>₹${t.sl}</td>
+                            <td>₹${t.target} <small style="color:var(--text-muted);">(1:${t.rr_ratio})</small></td>
+                            <td><b style="color:${achievedColor}">${t.current_rr || '1:0.0'}</b></td>
                             <td>${t.remaining_qty}</td>
-                            <td style="color:${pnlColor}; font-weight:bold;">${t.pnl}</td>
+                            <td style="color:${pnlColor}; font-weight:bold;">₹${t.pnl}</td>
                             <td><b>${t.status}</b></td>
+                            <td><button class="btn-manual-exit" onclick="manualExit(${t.id}, '${t.symbol}')">Exit</button></td>
                         </tr>`;
                     });
-                    document.getElementById('active-body').innerHTML = html;
+                    document.getElementById('active-body').innerHTML = html || `<tr><td colspan="10" style="text-align:center; color:var(--text-muted);">No open positions</td></tr>`;
+                } else {
+                    document.getElementById('active-body').innerHTML = `<tr><td colspan="10" style="text-align:center; color:var(--text-muted);">No open positions</td></tr>`;
                 }
 
                 if(document.getElementById('pending-view').style.display === 'block') {
                     renderPending();
                 }
 
-                if(data.trade_history && data.trade_history.length > 0) {
-                    let histHtml = '';
-                    data.trade_history.forEach(h => {
-                        const resColor = h.pnl >= 0 ? 'var(--up)' : 'var(--down)';
-                        histHtml += `<tr>
-                            <td><small style="color:var(--text-muted)">${h.time}</small></td>
-                            <td><b>${h.symbol}</b></td>
-                            <td>${h.side}</td>
-                            <td>${h.entry} → ${h.exit}</td>
-                            <td style="color:${resColor}; font-weight:bold;">${h.pnl}</td>
-                            <td><b>${h.status}</b></td>
-                        </tr>`;
-                    });
-                    document.getElementById('history-body').innerHTML = histHtml;
+                if(document.getElementById('history-view').style.display === 'block') {
+                    renderHistory();
                 }
 
                 if(document.getElementById('logs-view').style.display === 'block') {
