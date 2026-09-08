@@ -2,7 +2,7 @@
 # PROJECT: ALGO TERMINAL PRO - MULTI-USER EDITION
 # FILE: server.py
 # VERSION: v2.2-STABLE-FIXED
-# MODULE: Configured Dynamic Target (<=2 Full Exit | >2 Trailing), Invalidation, Manual Exit
+# MODULE: Configured Target, Invalidation, Date-Wise Historical P&L
 # =====================================================================
 
 import os
@@ -317,6 +317,28 @@ def manual_exit_trade():
             
     return jsonify({"status": "error", "message": "Active position not found"}), 404
 
+# ================= DATE-WISE HISTORICAL P&L ENDPOINT =================
+@app.route('/api/history-by-date', methods=['GET'])
+def get_history_by_date():
+    target_date = request.args.get("date")
+    if not target_date:
+        target_date = get_ist_now().strftime("%Y-%m-%d")
+
+    filtered = [h for h in bot_state["trade_history"] if h.get("trade_date") == target_date]
+    total_realized = round(sum(float(h.get("pnl", 0)) for h in filtered), 2)
+    wins = len([h for h in filtered if float(h.get("pnl", 0)) > 0])
+    win_rate = round((wins / len(filtered)) * 100) if filtered else 0
+
+    return jsonify({
+        "date": target_date,
+        "trades": filtered,
+        "realized_pnl": total_realized,
+        "win_rate": win_rate,
+        "total_trades": len(filtered),
+        "wins": wins,
+        "losses": len(filtered) - wins
+    })
+
 def worker_run_manual_5x_scan(selected_date):
     st = bot_state["manual_scan_state"]
     st["is_running"] = True
@@ -616,7 +638,6 @@ def background_scanner():
         cutoff_parts = [int(x) for x in bot_state["cutoff_time"].split(":")]
         cutoff_time_obj = datetime.time(cutoff_parts[0], cutoff_parts[1])
 
-        # Strict Cutoff Enforcement
         if now_time >= cutoff_time_obj:
             if bot_state["pending_orders"]:
                 for po in bot_state["pending_orders"]:
@@ -627,7 +648,6 @@ def background_scanner():
             time.sleep(5)
             continue
 
-        # 09:20 AM IST: C1 Volume 5x & PDH/PDL Filter
         if not c1_scanned and now_time >= datetime.time(9, 20, 2):
             today_str = now_ist.strftime("%Y-%m-%d")
             log(f"Scanning {len(bot_state['fno_stocks'])} stocks for 5x Volume + Strict PDH/PDL Breakout...")
@@ -696,7 +716,6 @@ def background_scanner():
             log(f"C1 Scan Complete: {len(candidates)} candidate(s) passed.")
             c1_scanned = True
 
-        # 09:25 AM IST: Confirmation, Setup Arming & Invalidation Check
         if c1_scanned and now_time >= datetime.time(9, 25, 2):
             active_open_count = len([t for t in bot_state["active_trades"] if t["status"] == "OPEN"])
             pending_count = len([p for p in bot_state["pending_orders"] if p["status"] == "PENDING"])
@@ -708,7 +727,6 @@ def background_scanner():
                     if (bot_state["trades_executed_today"] + pending_count) >= bot_state["max_trades"]:
                         break
 
-                    # Strict Check: Invalidate check across whole day
                     if sym in bot_state["invalidated_symbols"] or cand.get("order_state") != "READY FOR TRADE":
                         continue
 
@@ -844,7 +862,6 @@ def background_scanner():
                             pending_count += 1
                             log(f"Order Armed [{mode} | {order_type}]: {side} {sym} Level@{target_entry}")
 
-            # Continuous Monitor for Pending Orders & Strict Invalidation
             for po in bot_state["pending_orders"]:
                 if po["status"] != "PENDING":
                     continue
@@ -994,7 +1011,6 @@ def update_oi_stats():
         spurts_l = df_oi[df_oi['pchange'] < 0].sort_values(by="oi_spurt", ascending=False).head(10)
         bot_state["market_stats"]["oi_spurts_losers"] = spurts_l.to_dict('records') if not spurts_l.empty else []
 
-# ================= STRICT CONFIGURED TARGET & TRAILING ENGINE =================
 def market_data_monitor():
     last_stats_check = 0
 
@@ -1063,13 +1079,11 @@ def market_data_monitor():
 
                         # RULE 2: User ne Target > 1:2 set kiya he (jaise 1:3, 1:4)
                         else:
-                            # 1:1 Hit hone par SL seedha COST (Entry) shift
                             if not trade["cost_trailed"] and ltp >= (trade["entry"] + risk_unit):
                                 trade["cost_trailed"] = True
                                 trade["sl"] = trade["entry"]
                                 log(f"🛡️ 1:1 REACHED on {trade['symbol']}: SL shifted to COST (₹{trade['entry']}).")
 
-                            # 1:2 Hit hone par 50% Half Book & SL profit (+1R) me trail
                             if not trade["half_booked_1_2"] and ltp >= (trade["entry"] + 2 * risk_unit):
                                 trade["half_booked_1_2"] = True
                                 half_qty = max(1, trade["remaining_qty"] // 2)
@@ -1079,7 +1093,6 @@ def market_data_monitor():
                                     place_live_exit_order(trade["symbol"], trade["token"], "SELL", half_qty)
                                 log(f"🔥 1:2 REACHED on {trade['symbol']}: 50% Booked. SL Trailed to Profit (₹{trade['sl']}).")
 
-                            # Final Target Hit (e.g. 1:3, 1:4) par bachi hui sari quantity FULL EXIT
                             if ltp >= trade["target"]:
                                 trade["status"] = f"FULL TARGET HIT (1:{trade['rr_ratio']})"
                                 if trade["mode"] == "LIVE":
@@ -1087,7 +1100,6 @@ def market_data_monitor():
                                 record_trade_history(trade, ltp)
                                 continue
 
-                        # Stop-Loss Breach Check
                         if ltp <= trade["sl"]:
                             trade["status"] = "SL HIT" if not trade["cost_trailed"] else ("COST SL HIT" if not trade["half_booked_1_2"] else "TRAIL SL HIT")
                             if trade["mode"] == "LIVE":
@@ -1109,13 +1121,11 @@ def market_data_monitor():
 
                         # RULE 2: User ne Target > 1:2 set kiya he (jaise 1:3, 1:4)
                         else:
-                            # 1:1 Hit hone par SL seedha COST (Entry) shift
                             if not trade["cost_trailed"] and ltp <= (trade["entry"] - risk_unit):
                                 trade["cost_trailed"] = True
                                 trade["sl"] = trade["entry"]
                                 log(f"🛡️ 1:1 REACHED on {trade['symbol']}: SL shifted to COST (₹{trade['entry']}).")
 
-                            # 1:2 Hit hone par 50% Half Book & SL profit (+1R) me trail
                             if not trade["half_booked_1_2"] and ltp <= (trade["entry"] - 2 * risk_unit):
                                 trade["half_booked_1_2"] = True
                                 half_qty = max(1, trade["remaining_qty"] // 2)
@@ -1125,7 +1135,6 @@ def market_data_monitor():
                                     place_live_exit_order(trade["symbol"], trade["token"], "BUY", half_qty)
                                 log(f"🔥 1:2 REACHED on {trade['symbol']}: 50% Booked. SL Trailed to Profit (₹{trade['sl']}).")
 
-                            # Final Target Hit (e.g. 1:3, 1:4) par bachi hui sari quantity FULL EXIT
                             if ltp <= trade["target"]:
                                 trade["status"] = f"FULL TARGET HIT (1:{trade['rr_ratio']})"
                                 if trade["mode"] == "LIVE":
@@ -1133,7 +1142,6 @@ def market_data_monitor():
                                 record_trade_history(trade, ltp)
                                 continue
 
-                        # Stop-Loss Breach Check
                         if ltp >= trade["sl"]:
                             trade["status"] = "SL HIT" if not trade["cost_trailed"] else ("COST SL HIT" if not trade["half_booked_1_2"] else "TRAIL SL HIT")
                             if trade["mode"] == "LIVE":
@@ -1150,8 +1158,10 @@ def market_data_monitor():
         time.sleep(1)
 
 def record_trade_history(trade, exit_price):
+    now_ist = get_ist_now()
     bot_state["trade_history"].append({
-        "time": get_ist_now().strftime("%I:%M:%S %p"),
+        "trade_date": now_ist.strftime("%Y-%m-%d"),
+        "time": now_ist.strftime("%I:%M:%S %p"),
         "symbol": trade["symbol"],
         "side": trade["side"],
         "entry": trade["entry"],
