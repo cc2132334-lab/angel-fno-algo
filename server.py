@@ -1,3 +1,10 @@
+# =====================================================================
+# PROJECT: ALGO TERMINAL PRO - MULTI-USER EDITION
+# FILE: server.py
+# VERSION: v2.2-STABLE-FIXED
+# MODULE: 1:1 Cost Shift, Trailing Post 1:2, Manual Exit API, Full Day Inval
+# =====================================================================
+
 import os
 import time
 import json
@@ -93,6 +100,7 @@ bot_state = {
         "results": []
     },
     "c1_candidates": [],
+    "invalidated_symbols": [],
     "pending_orders": [],
     "active_trades": [],
     "trade_history": [],
@@ -267,7 +275,7 @@ def update_settings():
     if "risk_amount" in data:
         bot_state["risk_amount"] = int(data["risk_amount"])
     save_config()
-    log("Settings updated.")
+    log(f"Settings updated: MaxTrades={bot_state['max_trades']}, Cutoff={bot_state['cutoff_time']}, RR=1:{bot_state['rr_ratio']}, Risk=₹{bot_state['risk_amount']}")
     return jsonify({"status": "success"})
 
 @app.route('/api/toggle-engine', methods=['POST'])
@@ -290,6 +298,27 @@ def set_mode():
         return jsonify({"status": "success", "mode": mode})
     return jsonify({"status": "error"})
 
+# ================= MANUAL EXIT API =================
+@app.route('/api/manual-exit', methods=['POST'])
+def manual_exit_trade():
+    data = request.json or {}
+    trade_id = data.get("trade_id")
+    
+    for t in bot_state["active_trades"]:
+        if t["id"] == trade_id and t["status"] == "OPEN":
+            exit_px = t["ltp"]
+            t["status"] = "MANUAL EXIT"
+            if t["mode"] == "LIVE":
+                opp_side = "SELL" if t["side"] == "BUY" else "BUY"
+                place_live_exit_order(t["symbol"], t["token"], opp_side, t["remaining_qty"])
+            
+            record_trade_history(t, exit_px)
+            log(f"🛑 MANUAL EXIT EXECUTED: {t['symbol']} at ₹{exit_px} (PnL: ₹{t['pnl']})")
+            return jsonify({"status": "success", "message": f"{t['symbol']} exited successfully"})
+            
+    return jsonify({"status": "error", "message": "Active position not found"}), 404
+
+# ================= MANUAL 5X SCANNER =================
 def worker_run_manual_5x_scan(selected_date):
     st = bot_state["manual_scan_state"]
     st["is_running"] = True
@@ -303,20 +332,20 @@ def worker_run_manual_5x_scan(selected_date):
 
     try:
         target_dt = datetime.datetime.strptime(selected_date, "%Y-%m-%d")
-        from_dt = (target_dt - datetime.timedelta(days=10)).strftime("%Y-%m-%d 09:15")
+        from_dt = (target_dt - datetime.timedelta(days=15)).strftime("%Y-%m-%d 09:15")
         to_dt = (target_dt + datetime.timedelta(days=1)).strftime("%Y-%m-%d 15:30")
     except Exception:
         st["is_running"] = False
         return
 
-    log(f"Background 5x scan started for {selected_date}...")
+    log(f"Manual 5x scan started for {selected_date}...")
 
     for item in stocks_to_scan:
         if st["scan_cancelled"]:
-            log("Background 5x Scan cancelled by user.")
+            log("Manual 5x Scan stopped.")
             break
 
-        time.sleep(0.035)
+        time.sleep(0.03)
         st["scanned_count"] += 1
 
         params = {
@@ -433,7 +462,7 @@ def worker_run_cpr_scan(selected_date):
         st["is_running"] = False
         return
 
-    log(f"Background CPR scan (<= 0.15%) started for date: {selected_date}...")
+    log(f"CPR scan started for date: {selected_date}...")
 
     for item in stocks_to_scan:
         if st["scan_cancelled"]:
@@ -571,6 +600,7 @@ def cancel_live_order(order_id, variety="STOPLOSS"):
 def place_live_exit_order(symbol, token, side, qty):
     return place_live_order_raw(symbol, token, side, qty, "MARKET")
 
+# ================= BACKGROUND SCANNER ENGINE =================
 def background_scanner():
     c1_scanned = False
 
@@ -589,16 +619,18 @@ def background_scanner():
         cutoff_parts = [int(x) for x in bot_state["cutoff_time"].split(":")]
         cutoff_time_obj = datetime.time(cutoff_parts[0], cutoff_parts[1])
 
+        # Strict Cutoff Check
         if now_time >= cutoff_time_obj:
             if bot_state["pending_orders"]:
                 for po in bot_state["pending_orders"]:
                     if po["status"] == "PENDING":
                         cancel_live_order(po.get("order_id"), po.get("variety", "STOPLOSS"))
                         po["status"] = "CANCELLED_CUTOFF"
-                        log(f"Cutoff Time Hit: Cancelled pending order on {po['symbol']}")
+                        log(f"Cutoff Time Hit ({bot_state['cutoff_time']}): Cancelled pending order on {po['symbol']}")
             time.sleep(5)
             continue
 
+        # 09:20 AM IST: C1 Volume 5x & PDH/PDL Filter
         if not c1_scanned and now_time >= datetime.time(9, 20, 2):
             today_str = now_ist.strftime("%Y-%m-%d")
             log(f"Scanning {len(bot_state['fno_stocks'])} stocks for 5x Volume + Strict PDH/PDL Breakout...")
@@ -661,22 +693,26 @@ def background_scanner():
                                     "order_state": "READY FOR TRADE",
                                     "display_status": "READY FOR TRADE"
                                 })
-                                log(f"Setup Qualified: {item['symbol']} ({round(c1_vol/sma20_vol, 2)}x Vol) [{bias}] PDH:{pdh} PDL:{pdl}")
+                                log(f"Setup Qualified: {item['symbol']} ({round(c1_vol/sma20_vol, 2)}x Vol) [{bias}]")
 
             bot_state["c1_candidates"] = candidates
-            log(f"C1 Scan Complete: {len(candidates)} candidate(s) passed strict PDH/PDL filter.")
+            log(f"C1 Scan Complete: {len(candidates)} candidate(s) passed.")
             c1_scanned = True
 
+        # 09:25 AM IST: Confirmation, Setup Arming & Invalidation Check
         if c1_scanned and now_time >= datetime.time(9, 25, 2):
             active_open_count = len([t for t in bot_state["active_trades"] if t["status"] == "OPEN"])
             pending_count = len([p for p in bot_state["pending_orders"] if p["status"] == "PENDING"])
 
-            if (active_open_count + pending_count) < bot_state["max_trades"]:
+            if (bot_state["trades_executed_today"] + pending_count) < bot_state["max_trades"]:
                 for cand in bot_state["c1_candidates"]:
-                    if (active_open_count + pending_count) >= bot_state["max_trades"]:
+                    sym = cand["symbol"]
+
+                    if (bot_state["trades_executed_today"] + pending_count) >= bot_state["max_trades"]:
                         break
 
-                    if cand.get("order_state") not in ["READY FOR TRADE"]:
+                    # Strict Check: Agar stock din me kabhi bhi INVALID hua ho toh NEVER trade
+                    if sym in bot_state["invalidated_symbols"] or cand.get("order_state") != "READY FOR TRADE":
                         continue
 
                     df = fetch_candles(cand["token"], days=2)
@@ -698,6 +734,19 @@ def background_scanner():
                         c2_close = float(c2["close"])
                         c1_h = cand["c1_high"]
                         c1_l = cand["c1_low"]
+
+                        if cand["bias"] == "BULLISH_PDH_BREAKOUT" and c2_low < c1_l:
+                            bot_state["invalidated_symbols"].append(sym)
+                            cand["order_state"] = "PERMANENTLY_INVALID"
+                            cand["display_status"] = "INVALID"
+                            log(f"Setup Pre-Invalidated: {sym} breached C1 Low. Blocked for day.")
+                            continue
+                        elif cand["bias"] == "BEARISH_PDL_BREAKDOWN" and c2_high > c1_h:
+                            bot_state["invalidated_symbols"].append(sym)
+                            cand["order_state"] = "PERMANENTLY_INVALID"
+                            cand["display_status"] = "INVALID"
+                            log(f"Setup Pre-Invalidated: {sym} breached C1 High. Blocked for day.")
+                            continue
 
                         side = None
                         target_entry = 0.0
@@ -747,7 +796,7 @@ def background_scanner():
                             if is_beyond_one_to_one:
                                 cand["order_state"] = "BLOCKED_1_TO_1"
                                 cand["display_status"] = "CROSSED MORE THAN 1:1"
-                                log(f"Late Check: {cand['symbol']} crossed more than 1:1. Ignored.")
+                                log(f"Late Check: {sym} crossed 1:1 reward zone. Ignored.")
                                 continue
 
                             order_type = "STOPLOSS_MARKET"
@@ -778,7 +827,7 @@ def background_scanner():
                             bot_state["pending_orders"].append({
                                 "id": len(bot_state["pending_orders"]) + 1,
                                 "order_id": order_id,
-                                "symbol": cand["symbol"],
+                                "symbol": sym,
                                 "token": cand["token"],
                                 "side": side,
                                 "order_type": order_type,
@@ -796,8 +845,9 @@ def background_scanner():
                                 "time": get_ist_now().strftime("%I:%M:%S %p")
                             })
                             pending_count += 1
-                            log(f"Order Armed [{mode} | {order_type}]: {side} {cand['symbol']} Level@{target_entry}")
+                            log(f"Order Armed [{mode} | {order_type}]: {side} {sym} Level@{target_entry}")
 
+            # Pending Order Monitor & Strict C1 Invalidation
             for po in bot_state["pending_orders"]:
                 if po["status"] != "PENDING":
                     continue
@@ -810,21 +860,24 @@ def background_scanner():
                         is_invalid = False
                         if po["side"] == "BUY" and ltp < po["c1_low"]:
                             is_invalid = True
-                            reason = f"LTP (₹{ltp}) broke C1 Low (₹{po['c1_low']})"
+                            reason = f"LTP (₹{ltp}) breached C1 Low (₹{po['c1_low']})"
                         elif po["side"] == "SELL" and ltp > po["c1_high"]:
                             is_invalid = True
-                            reason = f"LTP (₹{ltp}) broke C1 High (₹{po['c1_high']})"
+                            reason = f"LTP (₹{ltp}) breached C1 High (₹{po['c1_high']})"
 
                         if is_invalid:
                             po["status"] = "CANCELLED_INVALID"
                             cancel_live_order(po.get("order_id"), po.get("variety", "STOPLOSS"))
                             
+                            if po["symbol"] not in bot_state["invalidated_symbols"]:
+                                bot_state["invalidated_symbols"].append(po["symbol"])
+
                             for c in bot_state["c1_candidates"]:
                                 if c["symbol"] == po["symbol"]:
                                     c["order_state"] = "PERMANENTLY_INVALID"
                                     c["display_status"] = "INVALID"
                                     
-                            log(f"⚠️ STRICT INVALIDATION: {po['symbol']} marked INVALID for full day! ({reason}).")
+                            log(f"⚠️ PERMANENT INVALIDATION: {po['symbol']} marked INVALID for full day! ({reason}).")
                             continue
 
                         triggered = False
@@ -859,7 +912,9 @@ def background_scanner():
                                 "rr_ratio": po["rr_ratio"],
                                 "qty": po["qty"],
                                 "remaining_qty": po["qty"],
-                                "half_booked": False,
+                                "cost_trailed": False,
+                                "half_booked_1_2": False,
+                                "current_rr": "1:0.0",
                                 "ltp": ltp,
                                 "pnl": 0.0,
                                 "status": "OPEN",
@@ -942,6 +997,7 @@ def update_oi_stats():
         spurts_l = df_oi[df_oi['pchange'] < 0].sort_values(by="oi_spurt", ascending=False).head(10)
         bot_state["market_stats"]["oi_spurts_losers"] = spurts_l.to_dict('records') if not spurts_l.empty else []
 
+# ================= LIVE POSITION MONITOR: 1:1 COST SHIFT & 1:2 TRAILING =================
 def market_data_monitor():
     last_stats_check = 0
 
@@ -990,17 +1046,40 @@ def market_data_monitor():
                     trade["ltp"] = ltp
                     risk_unit = abs(trade["entry"] - trade["orig_sl"])
 
+                    if risk_unit > 0:
+                        achieved_pts = (ltp - trade["entry"]) if trade["side"] == "BUY" else (trade["entry"] - ltp)
+                        current_ratio = max(0.0, achieved_pts / risk_unit)
+                        trade["current_rr"] = f"1:{round(current_ratio, 1)}"
+
                     if trade["side"] == "BUY":
                         trade["pnl"] = round((ltp - trade["entry"]) * trade["remaining_qty"], 2)
-                        if not trade["half_booked"] and ltp >= (trade["entry"] + 2 * risk_unit):
+
+                        # RULE A: Target 1:1 set kiya he to FULL BOOK
+                        if trade["rr_ratio"] == 1 and ltp >= trade["target"]:
+                            trade["status"] = "FULL TARGET HIT (1:1)"
+                            if trade["mode"] == "LIVE":
+                                place_live_exit_order(trade["symbol"], trade["token"], "SELL", trade["remaining_qty"])
+                            record_trade_history(trade, ltp)
+                            continue
+
+                        # RULE B: Target > 1:1 ho toh 1:1 cross hote hi SL = COST
+                        if trade["rr_ratio"] > 1 and not trade["cost_trailed"] and ltp >= (trade["entry"] + risk_unit):
+                            trade["cost_trailed"] = True
+                            trade["sl"] = trade["entry"]
+                            log(f"🛡️ 1:1 HIT on {trade['symbol']}: SL shifted to COST (₹{trade['entry']}). Risk Zero.")
+
+                        # RULE C: Trailing strictly starts ONLY AFTER 1:2
+                        if trade["rr_ratio"] >= 2 and not trade["half_booked_1_2"] and ltp >= (trade["entry"] + 2 * risk_unit):
+                            trade["half_booked_1_2"] = True
                             half_qty = max(1, trade["remaining_qty"] // 2)
                             trade["remaining_qty"] -= half_qty
-                            trade["half_booked"] = True
-                            trade["sl"] = trade["entry"]
-                            log(f"1:2 Hit on {trade['symbol']}! Booked 50%. SL trailed to Cost.")
+                            # SL trailed to +1R in profit
+                            trade["sl"] = round(trade["entry"] + risk_unit, 2)
+                            log(f"🔥 1:2 REACHED on {trade['symbol']}: 50% Booked. SL Trailed to Profit (₹{trade['sl']}).")
 
+                        # Exit checks
                         if ltp <= trade["sl"]:
-                            trade["status"] = "SL / TRAIL HIT"
+                            trade["status"] = "SL HIT" if not trade["cost_trailed"] else ("COST SL HIT" if not trade["half_booked_1_2"] else "TRAIL SL HIT")
                             if trade["mode"] == "LIVE":
                                 place_live_exit_order(trade["symbol"], trade["token"], "SELL", trade["remaining_qty"])
                             record_trade_history(trade, ltp)
@@ -1010,17 +1089,35 @@ def market_data_monitor():
                                 place_live_exit_order(trade["symbol"], trade["token"], "SELL", trade["remaining_qty"])
                             record_trade_history(trade, ltp)
 
-                    else:
+                    else:  # SELL TRADE
                         trade["pnl"] = round((trade["entry"] - ltp) * trade["remaining_qty"], 2)
-                        if not trade["half_booked"] and ltp <= (trade["entry"] - 2 * risk_unit):
+
+                        # RULE A: Target 1:1 set kiya he to FULL BOOK
+                        if trade["rr_ratio"] == 1 and ltp <= trade["target"]:
+                            trade["status"] = "FULL TARGET HIT (1:1)"
+                            if trade["mode"] == "LIVE":
+                                place_live_exit_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
+                            record_trade_history(trade, ltp)
+                            continue
+
+                        # RULE B: Target > 1:1 ho toh 1:1 cross hote hi SL = COST
+                        if trade["rr_ratio"] > 1 and not trade["cost_trailed"] and ltp <= (trade["entry"] - risk_unit):
+                            trade["cost_trailed"] = True
+                            trade["sl"] = trade["entry"]
+                            log(f"🛡️ 1:1 HIT on {trade['symbol']}: SL shifted to COST (₹{trade['entry']}). Risk Zero.")
+
+                        # RULE C: Trailing strictly starts ONLY AFTER 1:2
+                        if trade["rr_ratio"] >= 2 and not trade["half_booked_1_2"] and ltp <= (trade["entry"] - 2 * risk_unit):
+                            trade["half_booked_1_2"] = True
                             half_qty = max(1, trade["remaining_qty"] // 2)
                             trade["remaining_qty"] -= half_qty
-                            trade["half_booked"] = True
-                            trade["sl"] = trade["entry"]
-                            log(f"1:2 Hit on {trade['symbol']}! Booked 50%. SL trailed to Cost.")
+                            # SL trailed to +1R in profit
+                            trade["sl"] = round(trade["entry"] - risk_unit, 2)
+                            log(f"🔥 1:2 REACHED on {trade['symbol']}: 50% Booked. SL Trailed to Profit (₹{trade['sl']}).")
 
+                        # Exit checks
                         if ltp >= trade["sl"]:
-                            trade["status"] = "SL / TRAIL HIT"
+                            trade["status"] = "SL HIT" if not trade["cost_trailed"] else ("COST SL HIT" if not trade["half_booked_1_2"] else "TRAIL SL HIT")
                             if trade["mode"] == "LIVE":
                                 place_live_exit_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
                             record_trade_history(trade, ltp)
@@ -1029,11 +1126,14 @@ def market_data_monitor():
                             if trade["mode"] == "LIVE":
                                 place_live_exit_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
                             record_trade_history(trade, ltp)
+
             except Exception:
                 pass
             time.sleep(0.08)
 
-        bot_state["total_pnl"] = round(sum(t["pnl"] for t in bot_state["active_trades"] if t["status"] == "OPEN"), 2)
+        closed_pnl = sum(h["pnl"] for h in bot_state["trade_history"])
+        open_pnl = sum(t["pnl"] for t in bot_state["active_trades"] if t["status"] == "OPEN")
+        bot_state["total_pnl"] = round(closed_pnl + open_pnl, 2)
         time.sleep(1)
 
 def record_trade_history(trade, exit_price):
@@ -1043,6 +1143,7 @@ def record_trade_history(trade, exit_price):
         "side": trade["side"],
         "entry": trade["entry"],
         "exit": exit_price,
+        "target": trade["target"],
         "pnl": trade["pnl"],
         "status": trade["status"]
     })
