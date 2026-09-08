@@ -2,7 +2,7 @@
 # PROJECT: ALGO TERMINAL PRO - MULTI-USER EDITION
 # FILE: server.py
 # VERSION: v2.2-STABLE-FIXED
-# MODULE: 1:1 Cost Shift, Trailing Post 1:2, Manual Exit API, Full Day Inval
+# MODULE: Configured Dynamic Target (<=2 Full Exit | >2 Trailing), Invalidation, Manual Exit
 # =====================================================================
 
 import os
@@ -298,7 +298,6 @@ def set_mode():
         return jsonify({"status": "success", "mode": mode})
     return jsonify({"status": "error"})
 
-# ================= MANUAL EXIT API =================
 @app.route('/api/manual-exit', methods=['POST'])
 def manual_exit_trade():
     data = request.json or {}
@@ -318,7 +317,6 @@ def manual_exit_trade():
             
     return jsonify({"status": "error", "message": "Active position not found"}), 404
 
-# ================= MANUAL 5X SCANNER =================
 def worker_run_manual_5x_scan(selected_date):
     st = bot_state["manual_scan_state"]
     st["is_running"] = True
@@ -600,7 +598,6 @@ def cancel_live_order(order_id, variety="STOPLOSS"):
 def place_live_exit_order(symbol, token, side, qty):
     return place_live_order_raw(symbol, token, side, qty, "MARKET")
 
-# ================= BACKGROUND SCANNER ENGINE =================
 def background_scanner():
     c1_scanned = False
 
@@ -619,7 +616,7 @@ def background_scanner():
         cutoff_parts = [int(x) for x in bot_state["cutoff_time"].split(":")]
         cutoff_time_obj = datetime.time(cutoff_parts[0], cutoff_parts[1])
 
-        # Strict Cutoff Check
+        # Strict Cutoff Enforcement
         if now_time >= cutoff_time_obj:
             if bot_state["pending_orders"]:
                 for po in bot_state["pending_orders"]:
@@ -711,7 +708,7 @@ def background_scanner():
                     if (bot_state["trades_executed_today"] + pending_count) >= bot_state["max_trades"]:
                         break
 
-                    # Strict Check: Agar stock din me kabhi bhi INVALID hua ho toh NEVER trade
+                    # Strict Check: Invalidate check across whole day
                     if sym in bot_state["invalidated_symbols"] or cand.get("order_state") != "READY FOR TRADE":
                         continue
 
@@ -847,7 +844,7 @@ def background_scanner():
                             pending_count += 1
                             log(f"Order Armed [{mode} | {order_type}]: {side} {sym} Level@{target_entry}")
 
-            # Pending Order Monitor & Strict C1 Invalidation
+            # Continuous Monitor for Pending Orders & Strict Invalidation
             for po in bot_state["pending_orders"]:
                 if po["status"] != "PENDING":
                     continue
@@ -997,7 +994,7 @@ def update_oi_stats():
         spurts_l = df_oi[df_oi['pchange'] < 0].sort_values(by="oi_spurt", ascending=False).head(10)
         bot_state["market_stats"]["oi_spurts_losers"] = spurts_l.to_dict('records') if not spurts_l.empty else []
 
-# ================= LIVE POSITION MONITOR: 1:1 COST SHIFT & 1:2 TRAILING =================
+# ================= STRICT CONFIGURED TARGET & TRAILING ENGINE =================
 def market_data_monitor():
     last_stats_check = 0
 
@@ -1051,78 +1048,94 @@ def market_data_monitor():
                         current_ratio = max(0.0, achieved_pts / risk_unit)
                         trade["current_rr"] = f"1:{round(current_ratio, 1)}"
 
+                    # ---------------- BUY POSITION ----------------
                     if trade["side"] == "BUY":
                         trade["pnl"] = round((ltp - trade["entry"]) * trade["remaining_qty"], 2)
 
-                        # RULE A: Target 1:1 set kiya he to FULL BOOK
-                        if trade["rr_ratio"] == 1 and ltp >= trade["target"]:
-                            trade["status"] = "FULL TARGET HIT (1:1)"
-                            if trade["mode"] == "LIVE":
-                                place_live_exit_order(trade["symbol"], trade["token"], "SELL", trade["remaining_qty"])
-                            record_trade_history(trade, ltp)
-                            continue
+                        # RULE 1: User ne Target 1:1 ya 1:2 set kiya he toh Target level aate hi 100% FULL BOOK
+                        if trade["rr_ratio"] <= 2:
+                            if ltp >= trade["target"]:
+                                trade["status"] = f"FULL TARGET HIT (1:{trade['rr_ratio']})"
+                                if trade["mode"] == "LIVE":
+                                    place_live_exit_order(trade["symbol"], trade["token"], "SELL", trade["remaining_qty"])
+                                record_trade_history(trade, ltp)
+                                continue
 
-                        # RULE B: Target > 1:1 ho toh 1:1 cross hote hi SL = COST
-                        if trade["rr_ratio"] > 1 and not trade["cost_trailed"] and ltp >= (trade["entry"] + risk_unit):
-                            trade["cost_trailed"] = True
-                            trade["sl"] = trade["entry"]
-                            log(f"🛡️ 1:1 HIT on {trade['symbol']}: SL shifted to COST (₹{trade['entry']}). Risk Zero.")
+                        # RULE 2: User ne Target > 1:2 set kiya he (jaise 1:3, 1:4)
+                        else:
+                            # 1:1 Hit hone par SL seedha COST (Entry) shift
+                            if not trade["cost_trailed"] and ltp >= (trade["entry"] + risk_unit):
+                                trade["cost_trailed"] = True
+                                trade["sl"] = trade["entry"]
+                                log(f"🛡️ 1:1 REACHED on {trade['symbol']}: SL shifted to COST (₹{trade['entry']}).")
 
-                        # RULE C: Trailing strictly starts ONLY AFTER 1:2
-                        if trade["rr_ratio"] >= 2 and not trade["half_booked_1_2"] and ltp >= (trade["entry"] + 2 * risk_unit):
-                            trade["half_booked_1_2"] = True
-                            half_qty = max(1, trade["remaining_qty"] // 2)
-                            trade["remaining_qty"] -= half_qty
-                            # SL trailed to +1R in profit
-                            trade["sl"] = round(trade["entry"] + risk_unit, 2)
-                            log(f"🔥 1:2 REACHED on {trade['symbol']}: 50% Booked. SL Trailed to Profit (₹{trade['sl']}).")
+                            # 1:2 Hit hone par 50% Half Book & SL profit (+1R) me trail
+                            if not trade["half_booked_1_2"] and ltp >= (trade["entry"] + 2 * risk_unit):
+                                trade["half_booked_1_2"] = True
+                                half_qty = max(1, trade["remaining_qty"] // 2)
+                                trade["remaining_qty"] -= half_qty
+                                trade["sl"] = round(trade["entry"] + risk_unit, 2)
+                                if trade["mode"] == "LIVE":
+                                    place_live_exit_order(trade["symbol"], trade["token"], "SELL", half_qty)
+                                log(f"🔥 1:2 REACHED on {trade['symbol']}: 50% Booked. SL Trailed to Profit (₹{trade['sl']}).")
 
-                        # Exit checks
+                            # Final Target Hit (e.g. 1:3, 1:4) par bachi hui sari quantity FULL EXIT
+                            if ltp >= trade["target"]:
+                                trade["status"] = f"FULL TARGET HIT (1:{trade['rr_ratio']})"
+                                if trade["mode"] == "LIVE":
+                                    place_live_exit_order(trade["symbol"], trade["token"], "SELL", trade["remaining_qty"])
+                                record_trade_history(trade, ltp)
+                                continue
+
+                        # Stop-Loss Breach Check
                         if ltp <= trade["sl"]:
                             trade["status"] = "SL HIT" if not trade["cost_trailed"] else ("COST SL HIT" if not trade["half_booked_1_2"] else "TRAIL SL HIT")
                             if trade["mode"] == "LIVE":
                                 place_live_exit_order(trade["symbol"], trade["token"], "SELL", trade["remaining_qty"])
                             record_trade_history(trade, ltp)
-                        elif ltp >= trade["target"]:
-                            trade["status"] = "FULL TARGET HIT"
-                            if trade["mode"] == "LIVE":
-                                place_live_exit_order(trade["symbol"], trade["token"], "SELL", trade["remaining_qty"])
-                            record_trade_history(trade, ltp)
 
-                    else:  # SELL TRADE
+                    # ---------------- SELL POSITION ----------------
+                    else:
                         trade["pnl"] = round((trade["entry"] - ltp) * trade["remaining_qty"], 2)
 
-                        # RULE A: Target 1:1 set kiya he to FULL BOOK
-                        if trade["rr_ratio"] == 1 and ltp <= trade["target"]:
-                            trade["status"] = "FULL TARGET HIT (1:1)"
-                            if trade["mode"] == "LIVE":
-                                place_live_exit_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
-                            record_trade_history(trade, ltp)
-                            continue
+                        # RULE 1: User ne Target 1:1 ya 1:2 set kiya he toh Target level aate hi 100% FULL BOOK
+                        if trade["rr_ratio"] <= 2:
+                            if ltp <= trade["target"]:
+                                trade["status"] = f"FULL TARGET HIT (1:{trade['rr_ratio']})"
+                                if trade["mode"] == "LIVE":
+                                    place_live_exit_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
+                                record_trade_history(trade, ltp)
+                                continue
 
-                        # RULE B: Target > 1:1 ho toh 1:1 cross hote hi SL = COST
-                        if trade["rr_ratio"] > 1 and not trade["cost_trailed"] and ltp <= (trade["entry"] - risk_unit):
-                            trade["cost_trailed"] = True
-                            trade["sl"] = trade["entry"]
-                            log(f"🛡️ 1:1 HIT on {trade['symbol']}: SL shifted to COST (₹{trade['entry']}). Risk Zero.")
+                        # RULE 2: User ne Target > 1:2 set kiya he (jaise 1:3, 1:4)
+                        else:
+                            # 1:1 Hit hone par SL seedha COST (Entry) shift
+                            if not trade["cost_trailed"] and ltp <= (trade["entry"] - risk_unit):
+                                trade["cost_trailed"] = True
+                                trade["sl"] = trade["entry"]
+                                log(f"🛡️ 1:1 REACHED on {trade['symbol']}: SL shifted to COST (₹{trade['entry']}).")
 
-                        # RULE C: Trailing strictly starts ONLY AFTER 1:2
-                        if trade["rr_ratio"] >= 2 and not trade["half_booked_1_2"] and ltp <= (trade["entry"] - 2 * risk_unit):
-                            trade["half_booked_1_2"] = True
-                            half_qty = max(1, trade["remaining_qty"] // 2)
-                            trade["remaining_qty"] -= half_qty
-                            # SL trailed to +1R in profit
-                            trade["sl"] = round(trade["entry"] - risk_unit, 2)
-                            log(f"🔥 1:2 REACHED on {trade['symbol']}: 50% Booked. SL Trailed to Profit (₹{trade['sl']}).")
+                            # 1:2 Hit hone par 50% Half Book & SL profit (+1R) me trail
+                            if not trade["half_booked_1_2"] and ltp <= (trade["entry"] - 2 * risk_unit):
+                                trade["half_booked_1_2"] = True
+                                half_qty = max(1, trade["remaining_qty"] // 2)
+                                trade["remaining_qty"] -= half_qty
+                                trade["sl"] = round(trade["entry"] - risk_unit, 2)
+                                if trade["mode"] == "LIVE":
+                                    place_live_exit_order(trade["symbol"], trade["token"], "BUY", half_qty)
+                                log(f"🔥 1:2 REACHED on {trade['symbol']}: 50% Booked. SL Trailed to Profit (₹{trade['sl']}).")
 
-                        # Exit checks
+                            # Final Target Hit (e.g. 1:3, 1:4) par bachi hui sari quantity FULL EXIT
+                            if ltp <= trade["target"]:
+                                trade["status"] = f"FULL TARGET HIT (1:{trade['rr_ratio']})"
+                                if trade["mode"] == "LIVE":
+                                    place_live_exit_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
+                                record_trade_history(trade, ltp)
+                                continue
+
+                        # Stop-Loss Breach Check
                         if ltp >= trade["sl"]:
                             trade["status"] = "SL HIT" if not trade["cost_trailed"] else ("COST SL HIT" if not trade["half_booked_1_2"] else "TRAIL SL HIT")
-                            if trade["mode"] == "LIVE":
-                                place_live_exit_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
-                            record_trade_history(trade, ltp)
-                        elif ltp <= trade["target"]:
-                            trade["status"] = "FULL TARGET HIT"
                             if trade["mode"] == "LIVE":
                                 place_live_exit_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
                             record_trade_history(trade, ltp)
