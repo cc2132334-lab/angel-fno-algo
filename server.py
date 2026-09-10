@@ -648,7 +648,7 @@ def background_scanner():
             time.sleep(5)
             continue
 
-        if not c1_scanned and now_time >= datetime.time(9, 20, 2):
+        if not c1_scanned and now_time >= datetime.time(9, 21, 0):
             today_str = now_ist.strftime("%Y-%m-%d")
             log(f"Scanning {len(bot_state['fno_stocks'])} stocks for 5x Volume + Strict PDH/PDL Breakout...")
             candidates = []
