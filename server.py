@@ -2,7 +2,7 @@
 # PROJECT: ALGO TERMINAL PRO - MULTI-USER EDITION
 # FILE: server.py
 # VERSION: v2.2-STABLE-FIXED
-# MODULE: Configured Target, Invalidation, Date-Wise Historical P&L
+# MODULE: Rate-Limit Proof Scanner, Unified PDH/PDL, Frozen C1 Qualified Setups
 # =====================================================================
 
 import os
@@ -127,10 +127,11 @@ def calculate_quantity(risk_amount, entry_price, sl_price):
     except Exception:
         return 1
 
-def fetch_candles(token, interval="FIVE_MINUTE", days=4):
-    now = get_ist_now()
-    from_date = (now - datetime.timedelta(days=days)).strftime("%Y-%m-%d 09:15")
-    to_date = now.strftime("%Y-%m-%d %H:%M")
+# RATE-LIMIT SAFE CANDLE FETCHER WITH RETRY
+def fetch_candles_safe(token, interval="FIVE_MINUTE", from_date="", to_date=""):
+    if not bot_state.get("smart_api"):
+        return None
+        
     params = {
         "exchange": "NSE",
         "symboltoken": str(token),
@@ -138,36 +139,18 @@ def fetch_candles(token, interval="FIVE_MINUTE", days=4):
         "fromdate": from_date,
         "todate": to_date
     }
-    try:
-        data = bot_state["smart_api"].getCandleData(params)
-        if data and data.get("status") and data.get("data"):
-            return pd.DataFrame(data["data"], columns=["time", "open", "high", "low", "close", "volume"])
-    except Exception:
-        pass
+    
+    # Up to 2 retries on rate-limit drop
+    for attempt in range(2):
+        try:
+            data = bot_state["smart_api"].getCandleData(params)
+            if data and data.get("status") and data.get("data"):
+                return pd.DataFrame(data["data"], columns=["time", "open", "high", "low", "close", "volume"])
+            time.sleep(0.15)
+        except Exception:
+            time.sleep(0.15)
+            
     return None
-
-def fetch_daily_pdh_pdl(token):
-    now = get_ist_now()
-    from_date = (now - datetime.timedelta(days=12)).strftime("%Y-%m-%d 09:15")
-    to_date = (now - datetime.timedelta(days=1)).strftime("%Y-%m-%d 15:30")
-    params = {
-        "exchange": "NSE",
-        "symboltoken": str(token),
-        "interval": "ONE_DAY",
-        "fromdate": from_date,
-        "todate": to_date
-    }
-    try:
-        data = bot_state["smart_api"].getCandleData(params)
-        if data and data.get("status") and data.get("data"):
-            df = pd.DataFrame(data["data"], columns=["time", "open", "high", "low", "close", "volume"])
-            if not df.empty:
-                last_day = df.iloc[-1]
-                avg_5d_vol = float(df["volume"].tail(5).mean()) if len(df) >= 2 else float(last_day["volume"])
-                return float(last_day["high"]), float(last_day["low"]), float(last_day["close"]), float(last_day["volume"]), avg_5d_vol
-    except Exception:
-        pass
-    return None, None, None, 0, 1.0
 
 def load_fno_universe():
     try:
@@ -209,28 +192,8 @@ def load_fno_universe():
                             "all_fut_tokens": [c["token"] for c in contracts[:3]]
                         })
 
-        log(f"Verified {len(matched_stocks)} pure F&O Cash stocks. Loading baselines...")
-
-        final_list = []
-        for item in matched_stocks:
-            time.sleep(0.015)
-            pdh, pdl, prev_close, last_vol, avg_vol = fetch_daily_pdh_pdl(item["token"])
-            final_list.append({
-                "symbol": item["symbol"],
-                "token": item["token"],
-                "name": item["name"],
-                "pdh": pdh or 0.0,
-                "pdl": pdl or 0.0,
-                "prev_close": prev_close or 0.0,
-                "last_daily_vol": last_vol or 0,
-                "avg_5d_vol": avg_vol if avg_vol > 0 else 1.0,
-                "fut_symbol": item["fut_symbol"],
-                "fut_token": item["fut_token"],
-                "all_fut_tokens": item["all_fut_tokens"]
-            })
-
-        bot_state["fno_stocks"] = final_list
-        log(f"SUCCESS: {len(bot_state['fno_stocks'])} pure F&O Cash stocks loaded. Ready for scan.")
+        bot_state["fno_stocks"] = matched_stocks
+        log(f"SUCCESS: {len(bot_state['fno_stocks'])} pure F&O Cash stocks verified and loaded.")
         update_oi_stats()
     except Exception as e:
         log(f"Universe sync error: {e}")
@@ -317,7 +280,6 @@ def manual_exit_trade():
             
     return jsonify({"status": "error", "message": "Active position not found"}), 404
 
-# ================= DATE-WISE HISTORICAL P&L ENDPOINT =================
 @app.route('/api/history-by-date', methods=['GET'])
 def get_history_by_date():
     target_date = request.args.get("date")
@@ -339,6 +301,93 @@ def get_history_by_date():
         "losses": len(filtered) - wins
     })
 
+# ================= CORE SCANNER CALCULATION ENGINE (UNIFIED) =================
+# Ye function Bot Scanner aur Manual Scanner dono ke liye EXACT same math use karega
+def evaluate_stock_c1_setup(token, symbol, target_date_str):
+    try:
+        target_dt = datetime.datetime.strptime(target_date_str, "%Y-%m-%d")
+    except Exception:
+        return None
+
+    from_dt = (target_dt - datetime.timedelta(days=15)).strftime("%Y-%m-%d 09:15")
+    to_dt = (target_dt + datetime.timedelta(days=1)).strftime("%Y-%m-%d 15:30")
+
+    df = fetch_candles_safe(token, interval="FIVE_MINUTE", from_date=from_dt, to_date=to_dt)
+    if df is None or len(df) < 25:
+        return None
+
+    df['time_str'] = df['time'].astype(str)
+    df['date_part'] = df['time_str'].apply(lambda x: x[:10])
+
+    unique_dates = df['date_part'].unique().tolist()
+    if target_date_str not in unique_dates:
+        return None
+
+    cur_idx = unique_dates.index(target_date_str)
+    if cur_idx < 1:
+        return None
+
+    # Exact Previous Day High & Low from previous day's 5-minute candles
+    prev_day = unique_dates[cur_idx - 1]
+    prev_df = df[df['date_part'] == prev_day]
+    pdh = float(prev_df["high"].max())
+    pdl = float(prev_df["low"].min())
+
+    # SMA20 volume of preceding 20 candles
+    c1_matches = df.index[
+        (df['time_str'].str.startswith(target_date_str)) & 
+        (df['time_str'].str.contains("09:15"))
+    ].tolist()
+
+    if not c1_matches:
+        return None
+
+    c1_idx = c1_matches[0]
+    c1_candle = df.iloc[c1_idx]
+    c1_vol = float(c1_candle["volume"])
+    c1_close = float(c1_candle["close"])
+    c1_high = float(c1_candle["high"])
+    c1_low = float(c1_candle["low"])
+
+    # Preceding 20 candles volume average (Strict SMA20)
+    preceding_df = df.iloc[max(0, c1_idx - 20):c1_idx]
+    if len(preceding_df) < 5:
+        return None
+
+    sma20_vol = float(preceding_df["volume"].mean())
+    if sma20_vol <= 0:
+        return None
+
+    # Condition 1: Volume >= 5x SMA20
+    if c1_vol < (5.0 * sma20_vol):
+        return None
+
+    # Condition 2: C1 Close strictly outside PDH or PDL
+    bias = None
+    if pdh > 0 and c1_close > pdh:
+        bias = "BULLISH_PDH_BREAKOUT"
+    elif pdl > 0 and c1_close < pdl:
+        bias = "BEARISH_PDL_BREAKDOWN"
+
+    if not bias:
+        return None
+
+    return {
+        "symbol": symbol.replace("-EQ", ""),
+        "full_symbol": symbol,
+        "token": token,
+        "bias": bias,
+        "c1_high": round(c1_high, 2),
+        "c1_low": round(c1_low, 2),
+        "c1_close": round(c1_close, 2),
+        "c1_volume": int(c1_vol),
+        "avg_volume": int(sma20_vol),
+        "pdh": round(pdh, 2),
+        "pdl": round(pdl, 2),
+        "multiplier": round(c1_vol / sma20_vol, 2)
+    }
+
+# ================= MANUAL 5X SCANNER (RATE-LIMIT CONTROLLED) =================
 def worker_run_manual_5x_scan(selected_date):
     st = bot_state["manual_scan_state"]
     st["is_running"] = True
@@ -350,93 +399,32 @@ def worker_run_manual_5x_scan(selected_date):
     stocks_to_scan = bot_state["fno_stocks"]
     st["total_stocks"] = len(stocks_to_scan)
 
-    try:
-        target_dt = datetime.datetime.strptime(selected_date, "%Y-%m-%d")
-        from_dt = (target_dt - datetime.timedelta(days=15)).strftime("%Y-%m-%d 09:15")
-        to_dt = (target_dt + datetime.timedelta(days=1)).strftime("%Y-%m-%d 15:30")
-    except Exception:
-        st["is_running"] = False
-        return
-
-    log(f"Manual 5x scan started for {selected_date}...")
+    log(f"Manual 5x scan started for {selected_date} ({len(stocks_to_scan)} stocks)...")
 
     for item in stocks_to_scan:
         if st["scan_cancelled"]:
             log("Manual 5x Scan stopped.")
             break
 
-        time.sleep(0.03)
+        # Rate-limiting pause: ~100ms per stock ensures 0% dropped API requests
+        time.sleep(0.09)
         st["scanned_count"] += 1
 
-        params = {
-            "exchange": "NSE",
-            "symboltoken": str(item["token"]),
-            "interval": "FIVE_MINUTE",
-            "fromdate": from_dt,
-            "todate": to_dt
-        }
-        try:
-            res = bot_state["smart_api"].getCandleData(params)
-            if res and res.get("status") and res.get("data"):
-                df = pd.DataFrame(res["data"], columns=["time", "open", "high", "low", "close", "volume"])
-                df['time_str'] = df['time'].astype(str)
-                df['date_part'] = df['time_str'].apply(lambda x: x[:10])
-
-                unique_dates = df['date_part'].unique().tolist()
-                pdh = item.get("pdh", 0.0)
-                pdl = item.get("pdl", 0.0)
-                if selected_date in unique_dates:
-                    cur_idx = unique_dates.index(selected_date)
-                    if cur_idx >= 1:
-                        prev_day = unique_dates[cur_idx - 1]
-                        prev_df = df[df['date_part'] == prev_day]
-                        pdh = float(prev_df["high"].max())
-                        pdl = float(prev_df["low"].min())
-
-                df['vol_sma20'] = df['volume'].rolling(window=20).mean()
-
-                c1_matches = df.index[
-                    (df['time_str'].str.startswith(selected_date)) & 
-                    (df['time_str'].str.contains("09:15"))
-                ].tolist()
-
-                if c1_matches:
-                    c1_idx = c1_matches[0]
-                    c1_candle = df.iloc[c1_idx]
-                    c1_vol = float(c1_candle["volume"])
-                    c1_close = float(c1_candle["close"])
-                    c1_high = float(c1_candle["high"])
-                    c1_low = float(c1_candle["low"])
-                    sma20_vol = float(df.iloc[c1_idx]['vol_sma20'])
-
-                    if pd.isna(sma20_vol) or sma20_vol <= 0:
-                        sma20_vol = float(df.iloc[max(0, c1_idx-20):c1_idx+1]['volume'].mean())
-
-                    if sma20_vol > 0 and (c1_vol >= 5 * sma20_vol):
-                        bias = None
-                        if pdh > 0 and c1_close > pdh:
-                            bias = "BULLISH_PDH_BREAKOUT"
-                        elif pdl > 0 and c1_close < pdl:
-                            bias = "BEARISH_PDL_BREAKDOWN"
-
-                        if bias:
-                            st["results"].append({
-                                "symbol": item["symbol"].replace("-EQ", ""),
-                                "bias": bias,
-                                "c1_high": float(c1_high),
-                                "c1_low": float(c1_low),
-                                "c1_close": float(c1_close),
-                                "c1_volume": int(c1_vol),
-                                "avg_volume": int(sma20_vol),
-                                "pdh": float(pdh),
-                                "pdl": float(pdl),
-                                "multiplier": round(c1_vol / sma20_vol, 2)
-                            })
-        except Exception:
-            continue
+        res = evaluate_stock_c1_setup(item["token"], item["symbol"], selected_date)
+        if res:
+            st["results"].append({
+                "symbol": res["symbol"],
+                "bias": res["bias"],
+                "c1_high": res["c1_high"],
+                "c1_low": res["c1_low"],
+                "c1_close": res["c1_close"],
+                "pdh": res["pdh"],
+                "pdl": res["pdl"],
+                "multiplier": res["multiplier"]
+            })
 
     st["is_running"] = False
-    log(f"Manual 5x scan completed: {len(st['results'])} stock(s) qualified.")
+    log(f"Manual 5x scan finished! Total found: {len(st['results'])} stocks.")
 
 @app.route('/api/manual-5x-scan', methods=['POST'])
 def manual_5x_scan():
@@ -463,6 +451,7 @@ def stop_manual_scan():
     bot_state["manual_scan_state"]["scan_cancelled"] = True
     return jsonify({"status": "success", "message": "Scan stop signal sent."})
 
+# ================= CPR SCANNER =================
 def worker_run_cpr_scan(selected_date):
     st = bot_state["cpr_scan_state"]
     st["is_running"] = True
@@ -488,43 +477,31 @@ def worker_run_cpr_scan(selected_date):
         if st["scan_cancelled"]:
             break
 
-        time.sleep(0.025)
+        time.sleep(0.08)
         st["scanned_count"] += 1
 
-        params = {
-            "exchange": "NSE",
-            "symboltoken": str(item["token"]),
-            "interval": "ONE_DAY",
-            "fromdate": from_dt,
-            "todate": to_dt
-        }
-        try:
-            res = bot_state["smart_api"].getCandleData(params)
-            if res and res.get("status") and res.get("data"):
-                df = pd.DataFrame(res["data"], columns=["time", "open", "high", "low", "close", "volume"])
-                if len(df) >= 1:
-                    last_day = df.iloc[-1]
-                    high = float(last_day["high"])
-                    low = float(last_day["low"])
-                    close = float(last_day["close"])
+        df = fetch_candles_safe(item["token"], interval="ONE_DAY", from_date=from_dt, to_date=to_dt)
+        if df is not None and len(df) >= 1:
+            last_day = df.iloc[-1]
+            high = float(last_day["high"])
+            low = float(last_day["low"])
+            close = float(last_day["close"])
 
-                    pivot = (high + low + close) / 3.0
-                    bc = (high + low) / 2.0
-                    tc = (2 * pivot) - bc
-                    cpr_width = abs(tc - bc)
-                    cpr_width_pct = (cpr_width / pivot) * 100 if pivot > 0 else 1.0
+            pivot = (high + low + close) / 3.0
+            bc = (high + low) / 2.0
+            tc = (2 * pivot) - bc
+            cpr_width = abs(tc - bc)
+            cpr_width_pct = (cpr_width / pivot) * 100 if pivot > 0 else 1.0
 
-                    if cpr_width_pct <= 0.15:
-                        st["results"].append({
-                            "symbol": item["symbol"].replace("-EQ", ""),
-                            "pivot": round(pivot, 2),
-                            "tc": round(tc, 2),
-                            "bc": round(bc, 2),
-                            "width_pct": round(cpr_width_pct, 3),
-                            "ltp": float(item.get("prev_close") or close)
-                        })
-        except Exception:
-            continue
+            if cpr_width_pct <= 0.15:
+                st["results"].append({
+                    "symbol": item["symbol"].replace("-EQ", ""),
+                    "pivot": round(pivot, 2),
+                    "tc": round(tc, 2),
+                    "bc": round(bc, 2),
+                    "width_pct": round(cpr_width_pct, 3),
+                    "ltp": round(close, 2)
+                })
 
     st["is_running"] = False
     log(f"CPR Scan Complete: Found {len(st['results'])} narrow CPR stock(s).")
@@ -620,6 +597,7 @@ def cancel_live_order(order_id, variety="STOPLOSS"):
 def place_live_exit_order(symbol, token, side, qty):
     return place_live_order_raw(symbol, token, side, qty, "MARKET")
 
+# ================= LIVE BACKGROUND SCANNER =================
 def background_scanner():
     c1_scanned = False
 
@@ -648,76 +626,38 @@ def background_scanner():
             time.sleep(5)
             continue
 
+        # 09:21:00 AM IST: Scan at exact 09:21:00 with Unified Engine
         if not c1_scanned and now_time >= datetime.time(9, 21, 0):
             today_str = now_ist.strftime("%Y-%m-%d")
-            log(f"Scanning {len(bot_state['fno_stocks'])} stocks for 5x Volume + Strict PDH/PDL Breakout...")
+            log(f"09:21 AM: Running Unified 5x C1 Volume Scan on {len(bot_state['fno_stocks'])} stocks...")
             candidates = []
 
             for item in bot_state["fno_stocks"]:
-                time.sleep(0.03)
-                df = fetch_candles(item["token"], days=4)
-                if df is not None and len(df) >= 25:
-                    df['time_str'] = df['time'].astype(str)
-                    df['date_part'] = df['time_str'].apply(lambda x: x[:10])
-
-                    unique_dates = df['date_part'].unique()
-                    pdh = item.get("pdh", 0.0)
-                    pdl = item.get("pdl", 0.0)
-                    if (pdh <= 0 or pdl <= 0) and len(unique_dates) >= 2:
-                        prev_day = unique_dates[-2]
-                        prev_df = df[df['date_part'] == prev_day]
-                        pdh = float(prev_df["high"].max())
-                        pdl = float(prev_df["low"].min())
-
-                    df['vol_sma20'] = df['volume'].rolling(window=20).mean()
-
-                    c1_matches = df.index[
-                        (df['time_str'].str.startswith(today_str)) & 
-                        (df['time_str'].str.contains("09:15"))
-                    ].tolist()
-
-                    if c1_matches:
-                        c1_idx = c1_matches[0]
-                        c1_candle = df.iloc[c1_idx]
-                        c1_vol = float(c1_candle["volume"])
-                        c1_close = float(c1_candle["close"])
-                        c1_high = float(c1_candle["high"])
-                        c1_low = float(c1_candle["low"])
-                        sma20_vol = float(df.iloc[c1_idx]['vol_sma20'])
-
-                        if pd.isna(sma20_vol) or sma20_vol <= 0:
-                            sma20_vol = float(df.iloc[max(0, c1_idx-20):c1_idx+1]['volume'].mean())
-
-                        if sma20_vol > 0 and (c1_vol >= 5 * sma20_vol):
-                            bias = None
-                            if pdh > 0 and c1_close > pdh:
-                                bias = "BULLISH_PDH_BREAKOUT"
-                            elif pdl > 0 and c1_close < pdl:
-                                bias = "BEARISH_PDL_BREAKDOWN"
-
-                            if bias:
-                                candidates.append({
-                                    "symbol": item["symbol"],
-                                    "token": item["token"],
-                                    "bias": bias,
-                                    "c1_high": c1_high,
-                                    "c1_low": c1_low,
-                                    "c1_close": c1_close,
-                                    "c1_vol": int(c1_vol),
-                                    "pdh": pdh,
-                                    "pdl": pdl,
-                                    "ratio": round(c1_vol / sma20_vol, 2),
-                                    "order_state": "READY FOR TRADE",
-                                    "display_status": "READY FOR TRADE"
-                                })
-                                log(f"Setup Qualified: {item['symbol']} ({round(c1_vol/sma20_vol, 2)}x Vol) [{bias}]")
+                time.sleep(0.08)
+                res = evaluate_stock_c1_setup(item["token"], item["symbol"], today_str)
+                if res:
+                    candidates.append({
+                        "symbol": res["full_symbol"],
+                        "token": res["token"],
+                        "bias": res["bias"],
+                        "c1_high": res["c1_high"],
+                        "c1_low": res["c1_low"],
+                        "c1_close": res["c1_close"],
+                        "c1_vol": res["c1_volume"],
+                        "pdh": res["pdh"],
+                        "pdl": res["pdl"],
+                        "ratio": res["multiplier"],
+                        "order_state": "READY FOR TRADE",
+                        "display_status": "READY FOR TRADE"
+                    })
+                    log(f"🎯 Bot Qualified Setup: {res['symbol']} ({res['multiplier']}x Vol) [{res['bias']}]")
 
             bot_state["c1_candidates"] = candidates
-            log(f"C1 Scan Complete: {len(candidates)} candidate(s) passed.")
+            log(f"C1 Scan Complete: {len(candidates)} candidate(s) passed and FROZEN in qualified setups.")
             c1_scanned = True
 
+        # 09:25 AM IST: Confirmation, Setup Arming & Invalidation Check
         if c1_scanned and now_time >= datetime.time(9, 25, 2):
-            active_open_count = len([t for t in bot_state["active_trades"] if t["status"] == "OPEN"])
             pending_count = len([p for p in bot_state["pending_orders"] if p["status"] == "PENDING"])
 
             if (bot_state["trades_executed_today"] + pending_count) < bot_state["max_trades"]:
@@ -730,11 +670,13 @@ def background_scanner():
                     if sym in bot_state["invalidated_symbols"] or cand.get("order_state") != "READY FOR TRADE":
                         continue
 
-                    df = fetch_candles(cand["token"], days=2)
+                    today_str = now_ist.strftime("%Y-%m-%d")
+                    from_dt = (now_ist - datetime.timedelta(days=2)).strftime("%Y-%m-%d 09:15")
+                    to_dt = now_ist.strftime("%Y-%m-%d %H:%M")
+                    
+                    df = fetch_candles_safe(cand["token"], interval="FIVE_MINUTE", from_date=from_dt, to_date=to_dt)
                     if df is not None and len(df) >= 2:
-                        today_str = now_ist.strftime("%Y-%m-%d")
                         df['time_str'] = df['time'].astype(str)
-                        
                         c2_matches = df.index[
                             (df['time_str'].str.startswith(today_str)) & 
                             (df['time_str'].str.contains("09:20"))
@@ -862,6 +804,7 @@ def background_scanner():
                             pending_count += 1
                             log(f"Order Armed [{mode} | {order_type}]: {side} {sym} Level@{target_entry}")
 
+            # Pending Order Monitor & Strict Invalidation
             for po in bot_state["pending_orders"]:
                 if po["status"] != "PENDING":
                     continue
@@ -886,6 +829,7 @@ def background_scanner():
                             if po["symbol"] not in bot_state["invalidated_symbols"]:
                                 bot_state["invalidated_symbols"].append(po["symbol"])
 
+                            # Symbol retains in qualified list, only status changes to INVALID
                             for c in bot_state["c1_candidates"]:
                                 if c["symbol"] == po["symbol"]:
                                     c["order_state"] = "PERMANENTLY_INVALID"
@@ -1068,7 +1012,6 @@ def market_data_monitor():
                     if trade["side"] == "BUY":
                         trade["pnl"] = round((ltp - trade["entry"]) * trade["remaining_qty"], 2)
 
-                        # RULE 1: User ne Target 1:1 ya 1:2 set kiya he toh Target level aate hi 100% FULL BOOK
                         if trade["rr_ratio"] <= 2:
                             if ltp >= trade["target"]:
                                 trade["status"] = f"FULL TARGET HIT (1:{trade['rr_ratio']})"
@@ -1076,8 +1019,6 @@ def market_data_monitor():
                                     place_live_exit_order(trade["symbol"], trade["token"], "SELL", trade["remaining_qty"])
                                 record_trade_history(trade, ltp)
                                 continue
-
-                        # RULE 2: User ne Target > 1:2 set kiya he (jaise 1:3, 1:4)
                         else:
                             if not trade["cost_trailed"] and ltp >= (trade["entry"] + risk_unit):
                                 trade["cost_trailed"] = True
@@ -1110,7 +1051,6 @@ def market_data_monitor():
                     else:
                         trade["pnl"] = round((trade["entry"] - ltp) * trade["remaining_qty"], 2)
 
-                        # RULE 1: User ne Target 1:1 ya 1:2 set kiya he toh Target level aate hi 100% FULL BOOK
                         if trade["rr_ratio"] <= 2:
                             if ltp <= trade["target"]:
                                 trade["status"] = f"FULL TARGET HIT (1:{trade['rr_ratio']})"
@@ -1118,8 +1058,6 @@ def market_data_monitor():
                                     place_live_exit_order(trade["symbol"], trade["token"], "BUY", trade["remaining_qty"])
                                 record_trade_history(trade, ltp)
                                 continue
-
-                        # RULE 2: User ne Target > 1:2 set kiya he (jaise 1:3, 1:4)
                         else:
                             if not trade["cost_trailed"] and ltp <= (trade["entry"] - risk_unit):
                                 trade["cost_trailed"] = True
